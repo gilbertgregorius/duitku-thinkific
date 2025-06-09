@@ -5,7 +5,7 @@ class ThinkificService {
   constructor(config) {
     this.apiKey = config.apiKey;
     this.subdomain = config.subdomain;
-    this.baseUrl = `https://${this.subdomain}.thinkific.com/api/v1`;
+    this.baseUrl = `https://api.thinkific.com/api/public/v1`;
   }
 
   async createUser(userData) {
@@ -19,6 +19,7 @@ class ThinkificService {
         },
         {
           headers: {
+            'X-Auth-Subdomain': this.subdomain,
             'X-Auth-API-Key': this.apiKey,
             'Content-Type': 'application/json'
           }
@@ -41,6 +42,7 @@ class ThinkificService {
         `${this.baseUrl}/users?query[email]=${encodeURIComponent(email)}`,
         {
           headers: {
+            'X-Auth-Subdomain': this.subdomain,
             'X-Auth-API-Key': this.apiKey
           }
         }
@@ -64,6 +66,7 @@ class ThinkificService {
         },
         {
           headers: {
+            'X-Auth-Subdomain': this.subdomain,
             'X-Auth-API-Key': this.apiKey,
             'Content-Type': 'application/json'
           }
@@ -81,6 +84,7 @@ class ThinkificService {
     try {
       const response = await axios.get(`${this.baseUrl}/courses`, {
         headers: {
+          'X-Auth-Subdomain': this.subdomain,
           'X-Auth-API-Key': this.apiKey
         }
       });

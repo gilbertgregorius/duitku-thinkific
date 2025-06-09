@@ -307,7 +307,26 @@ class WebhookController {
 
     // Get customer data stored during payment initiation
     const customerDataKey = `customer_${merchantOrderId}`;
-    const customerData = await dataStore.get(customerDataKey);
+    let customerData = await dataStore.get(customerDataKey);
+    
+    // If no customer data in cache, try to reconstruct from payment record
+    if (!customerData && payment) {
+      logger.warn('Customer data not found in cache, reconstructing from payment record', {
+        orderId: merchantOrderId,
+        paymentId: payment.id
+      });
+      
+      customerData = {
+        customerName: payment.customer_name,
+        customerEmail: payment.customer_email,
+        customerPhone: payment.customer_phone,
+        courseName: payment.course_name,
+        courseDescription: payment.course_description,
+        coursePrice: payment.amount,
+        orderId: merchantOrderId,
+        reconstructed: true
+      };
+    }
     
     if (customerData) {
       // Process enrollment with enhanced data
@@ -318,7 +337,8 @@ class WebhookController {
       
       logger.info('Enrollment triggered successfully', {
         orderId: merchantOrderId,
-        result: enrollmentResult
+        result: enrollmentResult,
+        wasReconstructed: customerData.reconstructed || false
       });
       
       return enrollmentResult;
@@ -327,16 +347,18 @@ class WebhookController {
       await dataStore.addToQueue('manual_enrollment', {
         orderId: merchantOrderId,
         paymentRecord,
+        payment: payment,
         amount: paymentRecord.amount,
         reference: paymentRecord.reference,
         needsManualProcessing: true,
-        reason: 'Customer data not found during payment initiation',
+        reason: 'Customer data not found in cache and payment record incomplete',
         createdAt: new Date().toISOString()
       });
       
-      logger.warn('Customer data not found, added to manual processing', {
+      logger.error('Customer data not found and cannot be reconstructed', {
         orderId: merchantOrderId,
-        paymentAmount: paymentRecord.amount
+        paymentAmount: paymentRecord.amount,
+        paymentRecord: payment
       });
       
       throw new Error(`Customer data not found for ${merchantOrderId}, added to manual processing queue`);

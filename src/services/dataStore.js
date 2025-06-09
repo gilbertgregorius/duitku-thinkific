@@ -66,22 +66,28 @@ class DataStore {
     try {
       const query = `
         INSERT INTO payments (
-          order_id, course_name, amount, payment_method, payment_url, 
-          va_number, duitku_reference, expires_at, status
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          order_id, course_name, course_description, amount, payment_method, payment_url, 
+          va_number, qr_string, duitku_reference, expires_at, status,
+          customer_name, customer_email, customer_phone
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         RETURNING id
       `;
       
       const values = [
         paymentData.order_id,
         paymentData.course_name,
+        paymentData.course_description,
         paymentData.amount,
         paymentData.payment_method,
         paymentData.payment_url,
         paymentData.va_number,
+        paymentData.qr_string,
         paymentData.duitku_reference,
         paymentData.expires_at,
-        paymentData.status || 'pending'
+        paymentData.status || 'pending',
+        paymentData.customer_name,
+        paymentData.customer_email,
+        paymentData.customer_phone
       ];
 
       const result = await client.query(query, values);
@@ -230,6 +236,23 @@ class DataStore {
       ]);
       
       return result.rows[0];
+    } finally {
+      client.release();
+    }
+  }
+
+  async getEnrollmentsByEmail(email) {
+    const client = await this.pool.connect();
+    try {
+      const query = `
+        SELECT e.*, u.email as user_email, u.first_name, u.last_name
+        FROM enrollments e
+        JOIN users u ON e.user_id = u.id
+        WHERE u.email = $1
+        ORDER BY e.created_at DESC
+      `;
+      const result = await client.query(query, [email]);
+      return result.rows;
     } finally {
       client.release();
     }

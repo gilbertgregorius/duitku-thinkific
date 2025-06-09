@@ -16,6 +16,7 @@ CREATE TABLE payments (
     order_id VARCHAR(100) UNIQUE NOT NULL,
     user_id UUID REFERENCES users(id),
     course_name VARCHAR(255) NOT NULL,
+    course_description TEXT,
     amount DECIMAL(12,2) NOT NULL,
     currency VARCHAR(3) DEFAULT 'IDR',
     payment_method VARCHAR(50),
@@ -23,8 +24,15 @@ CREATE TABLE payments (
     duitku_reference VARCHAR(100),
     payment_url TEXT,
     va_number VARCHAR(50),
+    qr_string TEXT,
+    customer_name VARCHAR(255),
+    customer_email VARCHAR(255),
+    customer_phone VARCHAR(50),
     expires_at TIMESTAMP,
     paid_at TIMESTAMP,
+    webhook_processed_at TIMESTAMP,
+    settlement_date DATE,
+    issuer_code VARCHAR(50),
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
