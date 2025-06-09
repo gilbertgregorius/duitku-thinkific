@@ -1,0 +1,105 @@
+const axios = require('axios');
+const crypto = require('crypto');
+const logger = require('../utils/logger');
+
+class DuitkuService {
+  constructor(config) {
+    this.merchantCode = config.merchantCode;
+    this.apiKey = config.apiKey;
+    this.baseUrl = config.environment === 'production' 
+      ? 'https://passport.duitku.com'
+      : 'https://sandbox.duitku.com';
+  }
+
+  generateOrderId() {
+    const timestamp = Date.now();
+    const randomStr = Math.random().toString(36).substr(2, 9).toUpperCase();
+    return `COURSE_${timestamp}_${randomStr}`;
+  }
+
+  generateSignature(merchantCode, orderId, amount, apiKey) {
+    const signatureString = `${merchantCode}${orderId}${amount}${apiKey}`;
+    return crypto.createHash('md5').update(signatureString).digest('hex');
+  }
+
+  verifyWebhookSignature(data) {
+    const { merchantOrderId, amount, signature: receivedSignature } = data;
+    const signatureString = `${this.merchantCode}${amount}${merchantOrderId}${this.apiKey}`;
+    const calculatedSignature = crypto.createHmac('md5', this.apiKey)
+      .update(signatureString)
+      .digest('hex');
+    
+    return calculatedSignature.toLowerCase() === receivedSignature.toLowerCase();
+  }
+
+  async initiatePayment(paymentData) {
+    try {
+      const orderId = this.generateOrderId();
+      const signature = this.generateSignature(
+        this.merchantCode, 
+        orderId, 
+        paymentData.amount, 
+        this.apiKey
+      );
+
+      const requestData = {
+        merchantCode: this.merchantCode,
+        paymentAmount: paymentData.amount,
+        paymentMethod: paymentData.paymentMethod,
+        merchantOrderId: orderId,
+        productDetails: paymentData.courseDescription || paymentData.courseName,
+        customerVaName: paymentData.customerName,
+        email: paymentData.customerEmail,
+        phoneNumber: paymentData.customerPhone.replace(/\D/g, ''),
+        itemDetails: [{
+          name: paymentData.courseName,
+          price: paymentData.amount,
+          quantity: 1
+        }],
+        customerDetail: {
+          firstName: paymentData.customerName.split(' ')[0],
+          lastName: paymentData.customerName.split(' ').slice(1).join(' ') || '',
+          email: paymentData.customerEmail,
+          phoneNumber: paymentData.customerPhone.replace(/\D/g, '')
+        },
+        returnUrl: paymentData.returnUrl,
+        callbackUrl: paymentData.callbackUrl,
+        expiryPeriod: 1440, // 24 hours
+        signature
+      };
+
+      const response = await axios.post(
+        `${this.baseUrl}/webapi/api/merchant/v2/inquiry`,
+        requestData,
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
+          timeout: 30000
+        }
+      );
+
+      if (response.data.statusCode !== "00") {
+        throw new Error(`Payment initiation failed: ${response.data.statusMessage || 'Unknown error'}`);
+      }
+
+      return {
+        success: true,
+        orderId,
+        reference: response.data.reference,
+        paymentUrl: response.data.paymentUrl,
+        vaNumber: response.data.vaNumber,
+        qrString: response.data.qrString,
+        expiredDate: response.data.expiredDate,
+        instructions: response.data.paymentInstructions
+      };
+
+    } catch (error) {
+      logger.error('Duitku payment initiation error:', error);
+      throw new Error(`Payment initiation failed: ${error.message}`);
+    }
+  }
+}
+
+module.exports = DuitkuService;

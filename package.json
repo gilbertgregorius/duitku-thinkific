@@ -1,0 +1,35 @@
+{
+  "name": "duitku-thinkific",
+  "version": "1.0.0",
+  "description": "Course enrollment system with Duitku payments and Thinkific integration",
+  "main": "src/app.js",
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "nodemon src/app.js",
+    "test": "jest",
+    "migrate": "knex migrate:latest",
+    "seed": "knex seed:run"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "helmet": "^7.0.0",
+    "morgan": "^1.10.0",
+    "dotenv": "^16.3.1",
+    "axios": "^1.5.0",
+    "crypto": "^1.0.1",
+    "pg": "^8.11.3",
+    "knex": "^2.5.1",
+    "bull": "^4.11.3",
+    "redis": "^4.6.8",
+    "joi": "^17.9.2",
+    "winston": "^3.10.0",
+    "express-rate-limit": "^6.10.0",
+    "express-validator": "^7.0.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1",
+    "jest": "^29.6.4",
+    "supertest": "^6.3.3"
+  }
+}
