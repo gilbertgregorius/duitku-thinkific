@@ -35,16 +35,17 @@ class DuitkuService {
   async initiatePayment(paymentData) {
     try {
       const orderId = this.generateOrderId();
+      const amount = paymentData.coursePrice || paymentData.amount;
       const signature = this.generateSignature(
         this.merchantCode, 
         orderId, 
-        paymentData.amount, 
+        amount, 
         this.apiKey
       );
-
+      
       const requestData = {
         merchantCode: this.merchantCode,
-        paymentAmount: paymentData.amount,
+        paymentAmount: amount,
         paymentMethod: paymentData.paymentMethod,
         merchantOrderId: orderId,
         productDetails: paymentData.courseDescription || paymentData.courseName,
@@ -53,7 +54,7 @@ class DuitkuService {
         phoneNumber: paymentData.customerPhone.replace(/\D/g, ''),
         itemDetails: [{
           name: paymentData.courseName,
-          price: paymentData.amount,
+          price: amount,
           quantity: 1
         }],
         customerDetail: {

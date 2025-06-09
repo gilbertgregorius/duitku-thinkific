@@ -66,28 +66,22 @@ class DataStore {
     try {
       const query = `
         INSERT INTO payments (
-          order_id, user_email, user_name, user_phone, course_name, course_description,
-          amount, payment_method, payment_url, va_number, duitku_reference, 
-          expires_at, status, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+          order_id, course_name, amount, payment_method, payment_url, 
+          va_number, duitku_reference, expires_at, status
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         RETURNING id
       `;
       
       const values = [
         paymentData.order_id,
-        paymentData.user_email,
-        paymentData.user_name,
-        paymentData.user_phone,
         paymentData.course_name,
-        paymentData.course_description,
         paymentData.amount,
         paymentData.payment_method,
         paymentData.payment_url,
         paymentData.va_number,
         paymentData.duitku_reference,
         paymentData.expires_at,
-        paymentData.status,
-        paymentData.created_at
+        paymentData.status || 'pending'
       ];
 
       const result = await client.query(query, values);
@@ -112,7 +106,7 @@ class DataStore {
     const client = await this.pool.connect();
     try {
       const setClause = Object.keys(updateData)
-        .map((key, index) => `${key} = ${index + 2}`)
+        .map((key, index) => `${key} = $${index + 2}`)
         .join(', ');
       
       const query = `
@@ -197,12 +191,23 @@ class DataStore {
     }
   }
 
+  async getPaymentByOrderId(orderId) {
+    const client = await this.pool.connect();
+    try {
+      const query = 'SELECT * FROM payments WHERE order_id = $1';
+      const result = await client.query(query, [orderId]);
+      return result.rows[0];
+    } finally {
+      client.release();
+    }
+  }
+
   async getPaymentByUserEmail(email) {
     const client = await this.pool.connect();
     try {
-      const query = 'SELECT * FROM payments WHERE user_email = $1 ORDER BY created_at DESC LIMIT 1';
-      const result = await client.query(query, [email]);
-      return result.rows[0];
+      // Since payments table doesn't have user_email, we need to join with users
+      // For now, return null and we'll use order_id based lookup
+      return null;
     } finally {
       client.release();
     }

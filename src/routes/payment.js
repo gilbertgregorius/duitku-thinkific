@@ -5,11 +5,11 @@ const { paymentValidation } = require('../middleware/validation');
 
 router.post('/initiate', 
   paymentValidation.initiate,
-  paymentController.initiatePayment
+  (req, res) => paymentController.initiatePayment(req, res)
 );
 
 router.get('/status/:orderId',
-  paymentController.getPaymentStatus
+  (req, res) => paymentController.getPaymentStatus(req, res)
 );
 
 module.exports = router;
