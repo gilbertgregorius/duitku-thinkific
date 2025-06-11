@@ -15,7 +15,7 @@ const handleValidationErrors = (req, res, next) => {
 const paymentValidation = {
   initiate: [
     body('courseName').notEmpty().withMessage('Course name is required'),
-    body('coursePrice').isInt({ min: 1000 }).withMessage('Course price must be at least 1000 IDR'),
+    body('coursePrice').isInt({ min: 10000 }).withMessage('Course price must be at least 10000 IDR'),
     body('customerName').notEmpty().withMessage('Customer name is required'),
     body('customerEmail').isEmail().withMessage('Valid email is required'),
     body('customerPhone').matches(/^\+?[1-9]\d{1,14}$/).withMessage('Valid phone number is required'),

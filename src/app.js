@@ -47,8 +47,6 @@ app.use('/api/webhooks', webhookRoutes);
 app.use('/api/enrollment', enrollmentRoutes);
 app.use('/oauth', oauthRoutes);
 app.use('/settings', settingsRoutes);
-
-// API endpoints for frontend
 app.use('/orders', require('./routes/orders.js'));
 app.use('/enrollments', enrollmentRoutes);
 

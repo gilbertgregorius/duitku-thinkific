@@ -3,34 +3,40 @@ const crypto = require('crypto');
 const axios = require('axios');
 const router = express.Router();
 const logger = require('../utils/logger');
+const oauthConfig = require('../config/oauth');
+const redisConfig = require('../config/redis');
+const ErrorHandler = require('../middleware/errorHandler');
 
-// Store code verifiers temporarily (in production, use Redis)
-const codeVerifiers = new Map();
+// Store code verifiers in Redis instead of memory
+const getCodeVerifierKey = (state) => `oauth:verifier:${state}`;
+const getTokenKey = (subdomain) => `oauth:token:${subdomain}`;
 
-// DEBUG ENDPOINT - Check OAuth configuration
-router.get('/debug', (req, res) => {
-    const baseUrl = process.env.APP_BASE_URL.endsWith('/') ? process.env.APP_BASE_URL.slice(0, -1) : process.env.APP_BASE_URL;
-    const redirect_uri = `${baseUrl}/oauth/callback`;
-    const config = {
-        client_id: process.env.THINKIFIC_CLIENT_ID,
-        app_base_url: process.env.APP_BASE_URL,
-        redirect_uri: redirect_uri,
-        callback_url_corrected: redirect_uri,
-        ngrok_status: 'Check if tunnel is active'
-    };
+// DEBUG ENDPOINT - to check OAuth configuration
+router.get('/debug', ErrorHandler.asyncHandler(async (req, res) => {
+  try {
+    const debugInfo = oauthConfig.getDebugInfo();
+    
+    // Test subdomain for demonstration
+    const testSubdomain = req.query.subdomain || 'duitku';
+    const testState = crypto.randomBytes(32).toString('base64url');
+    const testChallenge = 'test_challenge_12345';
+    
+    debugInfo.sampleAuthUrl = oauthConfig.getAuthorizationUrl(testSubdomain, testState, testChallenge);
+    debugInfo.tokenEndpoint = oauthConfig.getTokenEndpoint(testSubdomain);
     
     res.json({
-        message: 'OAuth Configuration Debug',
-        config,
-        instructions: [
-            '1. Copy the redirect_uri below',
-            '2. Go to https://partner.thinkific.com/apps',
-            '3. Edit your app and set EXACTLY this redirect URI',
-            '4. Save the app configuration',
-            '5. Try the install again'
-        ]
+      success: true,
+      oauth_configuration: debugInfo,
+      notes: {
+        redirect_uri_to_configure: debugInfo.redirectUri,
+        message: "Use the redirect_uri above in your Thinkific Partner App configuration"
+      }
     });
-});
+  } catch (error) {
+    logger.error('OAuth debug error:', error);
+    ErrorHandler.sendError(res, 'Failed to get OAuth debug info', 500);
+  }
+}));
 
 // INSTALL ENDPOINT - following THINKIFIC_OAUTH_API.md pattern
 router.get('/install', (req, res) => {

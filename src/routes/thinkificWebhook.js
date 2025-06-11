@@ -68,35 +68,6 @@ router.post('/thinkific-order', verifyThinkificSignature, async (req, res) => {
     }
 });
 
-// Handle Thinkific user signup webhooks (optional)
-router.post('/thinkific-signup', async (req, res) => {
-    try {
-        const { event, data, timestamp } = req.body;
-        
-        logger.info('Received Thinkific signup webhook:', {
-            event,
-            userId: data.userId,
-            email: data.email
-        });
-        
-        // Store user signup data for analytics
-        await dataStore.storeUserSignup({
-            thinkific_user_id: data.userId,
-            email: data.email,
-            first_name: data.firstName,
-            last_name: data.lastName,
-            phone: data.phone,
-            signup_date: data.signupDate,
-            source: 'thinkific'
-        });
-        
-        res.json({ status: 'success', message: 'Signup recorded' });
-        
-    } catch (error) {
-        logger.error('Error processing Thinkific signup webhook:', error);
-        res.status(500).json({ error: 'Failed to process signup' });
-    }
-});
 
 // Process Thinkific order and handle enrollments
 async function processThinkificOrder(orderData) {
