@@ -13,8 +13,8 @@ class ThinkificService {
       const response = await axios.post(
         `${this.baseUrl}/users`,
         {
-          first_name: userData.firstName,
-          last_name: userData.lastName,
+          first_name: userData.first_name || userData.firstName,
+          last_name: userData.last_name || userData.lastName,
           email: userData.email
         },
         {
@@ -55,7 +55,7 @@ class ThinkificService {
     }
   }
 
-  async enrollUser(courseId, userId) {
+  async enrollUser(userId, courseId) {
     try {
       const response = await axios.post(
         `${this.baseUrl}/enrollments`,

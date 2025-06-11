@@ -280,6 +280,135 @@ class DataStore {
       return null;
     }
   }
+
+  // New methods for Thinkific webhook handling
+  async storePayment(paymentData) {
+    const client = await this.pool.connect();
+    try {
+      const query = `
+        INSERT INTO payments (
+          order_id, course_name, course_description, amount, payment_method, 
+          status, customer_name, customer_email, customer_phone, 
+          duitku_reference, created_at, metadata
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        RETURNING id
+      `;
+      
+      const values = [
+        paymentData.reference,
+        paymentData.course_name || 'Multiple Courses',
+        paymentData.course_description || 'Course purchase from Thinkific',
+        paymentData.amount,
+        paymentData.payment_method,
+        paymentData.status,
+        paymentData.customer_name,
+        paymentData.customer_email,
+        paymentData.customer_phone,
+        paymentData.reference,
+        paymentData.created_at || new Date(),
+        paymentData.metadata
+      ];
+
+      const result = await client.query(query, values);
+      return result.rows[0];
+    } finally {
+      client.release();
+    }
+  }
+
+  async storeEnrollment(enrollmentData) {
+    const client = await this.pool.connect();
+    try {
+      // First, find or create user
+      let user = await this.findUserByEmail(enrollmentData.customer_email);
+      
+      if (!user) {
+        const userQuery = `
+          INSERT INTO users (email, first_name, last_name, thinkific_user_id, created_at)
+          VALUES ($1, $2, $3, $4, NOW())
+          RETURNING *
+        `;
+        
+        const nameParts = (enrollmentData.customer_name || '').split(' ');
+        const firstName = nameParts[0] || '';
+        const lastName = nameParts.slice(1).join(' ') || '';
+        
+        const userResult = await client.query(userQuery, [
+          enrollmentData.customer_email,
+          firstName,
+          lastName,
+          enrollmentData.thinkific_user_id
+        ]);
+        
+        user = userResult.rows[0];
+      }
+
+      // Find payment record by reference
+      const paymentQuery = 'SELECT * FROM payments WHERE order_id = $1 OR duitku_reference = $1';
+      const paymentResult = await client.query(paymentQuery, [enrollmentData.payment_reference]);
+      const payment = paymentResult.rows[0];
+
+      // Create enrollment record
+      const enrollmentQuery = `
+        INSERT INTO enrollments (
+          user_id, payment_id, thinkific_enrollment_id, course_id, course_name,
+          status, enrolled_at, created_at, metadata
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8)
+        RETURNING *
+      `;
+
+      const result = await client.query(enrollmentQuery, [
+        user.id,
+        payment?.id,
+        enrollmentData.thinkific_enrollment_id,
+        enrollmentData.thinkific_course_id,
+        enrollmentData.course_name,
+        'active',
+        enrollmentData.enrollment_date || new Date(),
+        enrollmentData.metadata
+      ]);
+
+      return result.rows[0];
+    } finally {
+      client.release();
+    }
+  }
+
+  async storeUserSignup(userData) {
+    const client = await this.pool.connect();
+    try {
+      const query = `
+        INSERT INTO user_signups (
+          thinkific_user_id, email, first_name, last_name, phone, 
+          signup_date, source, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+        ON CONFLICT (email) DO UPDATE SET
+          thinkific_user_id = EXCLUDED.thinkific_user_id,
+          signup_date = EXCLUDED.signup_date,
+          updated_at = NOW()
+        RETURNING *
+      `;
+      
+      const values = [
+        userData.thinkific_user_id,
+        userData.email,
+        userData.first_name,
+        userData.last_name,
+        userData.phone,
+        userData.signup_date,
+        userData.source
+      ];
+
+      const result = await client.query(query, values);
+      return result.rows[0];
+    } catch (error) {
+      // Table might not exist yet, that's okay
+      logger.warn('Could not store user signup (table may not exist):', error.message);
+      return null;
+    } finally {
+      client.release();
+    }
+  }
 }
 
 module.exports = DataStore;
