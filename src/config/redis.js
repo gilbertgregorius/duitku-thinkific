@@ -138,6 +138,20 @@ class RedisConfig {
       return false;
     }
   }
+
+  validate() {
+    // Redis validation can be done during connection
+    // This method exists for consistency with other configs
+    return true;
+  }
+
+  getDebugInfo() {
+    return {
+      url: process.env.REDIS_URL || 'redis://localhost:6379',
+      connected: this.isConnected,
+      client: this.client ? 'INITIALIZED' : 'NOT_INITIALIZED'
+    };
+  }
 }
 
 // Singleton instance

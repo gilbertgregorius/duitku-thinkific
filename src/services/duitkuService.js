@@ -4,11 +4,24 @@ const logger = require('../utils/logger');
 
 class DuitkuService {
   constructor(config) {
-    this.merchantCode = config.merchantCode;
-    this.apiKey = config.apiKey;
-    this.baseUrl = config.environment === 'production' 
-      ? 'https://passport.duitku.com'
-      : 'https://sandbox.duitku.com';
+    // Use the new APIs config if available, fallback to legacy config
+    if (config.apis && config.apis.duitku) {
+      // New modular approach
+      this.merchantCode = config.apis.duitku.merchantCode;
+      this.apiKey = config.apis.duitku.apiKey;
+      this.baseUrl = config.apis.duitku.baseUrl;
+      this.environment = config.apis.duitku.environment;
+      this.timeout = config.apis.duitku.timeout;
+    } else {
+      // Legacy approach compatibility
+      this.merchantCode = config.merchantCode;
+      this.apiKey = config.apiKey;
+      this.baseUrl = config.environment === 'production' 
+        ? 'https://passport.duitku.com'
+        : 'https://sandbox.duitku.com';
+      this.environment = config.environment;
+      this.timeout = 30000;
+    }
   }
 
   generateOrderId() {
@@ -70,7 +83,7 @@ class DuitkuService {
       };
 
       const response = await axios.post(
-        `${this.baseUrl}/webapi/api/merchant/v2/inquiry`,
+        `${this.baseUrl}/api/merchant/createInvoice`,
         requestData,
         {
           headers: {

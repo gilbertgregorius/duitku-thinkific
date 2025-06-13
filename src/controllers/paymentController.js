@@ -3,8 +3,15 @@ const DuitkuService = require('../services/duitkuService.js');
 const DataStore = require('../services/dataStore.js');
 const config = require('../config/index.js');
 
-const duitkuService = new DuitkuService(config.duitku);
+// Add new model imports for Thinkific integration
+const Payment = require('../models/Payment');
+const User = require('../models/User');
+const ThinkificService = require('../services/thinkificServices');
+
+// Use the new configuration for DuitkuService
+const duitkuService = new DuitkuService(config.duitkuConfig);
 const dataStore = new DataStore();
+const thinkificService = new ThinkificService(config.thinkificConfig);
 
 class PaymentController {
   
@@ -229,6 +236,267 @@ class PaymentController {
         success: false,
         error: 'Failed to get payment status'
       });
+    }
+  }
+
+  // New method to handle Thinkific payment notifications
+  async thinkificPaymentNotification(req, res) {
+    try {
+      const notificationData = req.body;
+
+      logger.info('Thinkific payment notification received', { notificationData });
+
+      // Validate notification data
+      if (!notificationData.order_id || !notificationData.status) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid notification data'
+        });
+      }
+
+      // Find the corresponding payment record
+      const payment = await dataStore.getPayment(notificationData.order_id);
+
+      if (!payment) {
+        return res.status(404).json({
+          success: false,
+          error: 'Payment not found'
+        });
+      }
+
+      // Update payment status based on Thinkific notification
+      payment.status = notificationData.status;
+
+      await dataStore.savePayment(payment);
+
+      logger.info('Payment status updated from Thinkific notification', {
+        orderId: payment.order_id,
+        newStatus: payment.status
+      });
+
+      res.json({
+        success: true,
+        message: 'Payment status updated'
+      });
+
+    } catch (error) {
+      logger.error('Thinkific payment notification error:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to process Thinkific payment notification'
+      });
+    }
+  }
+
+  // New method to create or update user in Thinkific
+  async upsertUserInThinkific(req, res) {
+    try {
+      const { email, firstName, lastName, phone } = req.body;
+
+      if (!email) {
+        return res.status(400).json({
+          success: false,
+          error: 'Email is required'
+        });
+      }
+
+      // Check if user already exists in Thinkific
+      let user = await User.findOne({ email });
+
+      if (user) {
+        // Update existing user
+        user.firstName = firstName;
+        user.lastName = lastName;
+        user.phone = phone;
+      } else {
+        // Create new user
+        user = new User({
+          email,
+          firstName,
+          lastName,
+          phone
+        });
+      }
+
+      await user.save();
+
+      logger.info('User upserted in Thinkific', {
+        email,
+        firstName,
+        lastName,
+        phone
+      });
+
+      res.json({
+        success: true,
+        message: 'User upserted successfully'
+      });
+
+    } catch (error) {
+      logger.error('Upsert user in Thinkific error:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to upsert user in Thinkific'
+      });
+    }
+  }
+
+  // New method to handle Thinkific course enrollment
+  async enrollUserInCourse(req, res) {
+    try {
+      const { email, courseId } = req.body;
+
+      if (!email || !courseId) {
+        return res.status(400).json({
+          success: false,
+          error: 'Email and Course ID are required'
+        });
+      }
+
+      // Find the user by email
+      const user = await User.findOne({ email });
+
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          error: 'User not found'
+        });
+      }
+
+      // Enroll the user in the course
+      const enrollment = await thinkificService.enrollUserInCourse(user.thinkificId, courseId);
+
+      if (!enrollment) {
+        return res.status(500).json({
+          success: false,
+          error: 'Failed to enroll user in course'
+        });
+      }
+
+      logger.info('User enrolled in course', {
+        email,
+        courseId
+      });
+
+      res.json({
+        success: true,
+        message: 'User enrolled in course successfully'
+      });
+
+    } catch (error) {
+      logger.error('Enroll user in course error:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to enroll user in course'
+      });
+    }
+  }
+
+  // New methods from newController.js for Thinkific integration
+  async showCheckout(req, res) {
+    try {
+      const { courseId, subdomain } = req.query;
+      
+      // Get course details from Thinkific
+      const user = await User.findOne({ where: { subdomain } });
+      if (!user) {
+        return res.status(404).render('error', { error: 'User not found' });
+      }
+      
+      const course = await thinkificService.getCourse(user.accessToken, courseId);
+      
+      res.render('payment/checkout', {
+        course,
+        amount: course.price,
+        subdomain,
+        userId: user.id
+      });
+    } catch (error) {
+      logger.error('Checkout page error:', error);
+      res.status(500).render('error', { error: 'Failed to load checkout page' });
+    }
+  }
+
+  async createPayment(req, res) {
+    try {
+      const { courseId, amount } = req.body;
+      const { subdomain } = req.query;
+      
+      const user = await User.findOne({ where: { subdomain } });
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      const orderId = `ORDER-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      
+      // Create external order in Thinkific
+      const thinkificOrder = await thinkificService.createExternalOrder({
+        accessToken: user.accessToken,
+        courseId,
+        amount,
+        orderId
+      });
+      
+      // Create payment in Duitku
+      const duitkuPayment = await duitkuService.createPayment({
+        orderId,
+        amount,
+        customerEmail: user.email || `${subdomain}@thinkific.com`
+      });
+      
+      // Save payment record
+      const payment = await Payment.create({
+        orderId,
+        userId: user.id,
+        courseId,
+        amount,
+        paymentUrl: duitkuPayment.paymentUrl,
+        duitkuReference: duitkuPayment.reference,
+        thinkificOrderId: thinkificOrder.id
+      });
+      
+      res.json({ 
+        success: true, 
+        paymentUrl: duitkuPayment.paymentUrl,
+        orderId 
+      });
+    } catch (error) {
+      logger.error('Payment creation failed:', error);
+      res.status(500).json({ error: 'Payment creation failed' });
+    }
+  }
+
+  async showSuccess(req, res) {
+    try {
+      const { orderId } = req.query;
+      const payment = await Payment.findOne({ 
+        where: { orderId },
+        include: [{ model: User, as: 'user' }]
+      });
+      
+      if (!payment) {
+        return res.status(404).render('error', { error: 'Payment not found' });
+      }
+
+      res.render('payment/success', {
+        orderId: payment.orderId,
+        amount: payment.amount,
+        courseName: 'Course Name', // You might want to fetch this
+        backUrl: `https://${payment.user?.subdomain}.thinkific.com`
+      });
+    } catch (error) {
+      logger.error('Success page error:', error);
+      res.status(500).render('error', { error: 'Failed to load success page' });
+    }
+  }
+
+  async showFailure(req, res) {
+    try {
+      const { orderId } = req.query;
+      res.render('payment/failure', { orderId });
+    } catch (error) {
+      logger.error('Failure page error:', error);
+      res.status(500).render('error', { error: 'Failed to load failure page' });
     }
   }
 }

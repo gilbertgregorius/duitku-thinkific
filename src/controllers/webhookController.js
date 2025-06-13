@@ -4,10 +4,12 @@ const ThinkificService = require('../services/thinkificServices');
 const DataStore = require('../services/dataStore');
 const EnrollmentController = require('./enrollmentController');
 const config = require('../config');
+const apisConfig = require('../config/apis');
 const crypto = require('crypto');
 
-const duitkuService = new DuitkuService(config.duitku);
-const thinkificService = new ThinkificService(config.thinkific);
+// Use the new APIs config for services
+const duitkuService = new DuitkuService(apisConfig);
+const thinkificService = new ThinkificService(apisConfig.thinkific);
 const dataStore = new DataStore();
 
 class WebhookController {
@@ -41,12 +43,12 @@ class WebhookController {
       return { valid: false, error: "Missing required fields for signature verification" };
     }
 
-    if (!config.duitku.merchantCode || !config.duitku.apiKey) {
+    if (!apisConfig.duitku.merchantCode || !apisConfig.duitku.apiKey) {
       return { valid: false, error: "Merchant code and API key are required for verification" };
     }
 
     // Create signature for verification
-    const signatureString = `${config.duitku.merchantCode}${amount}${merchantOrderId}${config.duitku.apiKey}`;
+    const signatureString = `${apisConfig.duitku.merchantCode}${amount}${merchantOrderId}${apisConfig.duitku.apiKey}`;
     const calculatedSignature = crypto.createHash('md5')
       .update(signatureString)
       .digest('hex');

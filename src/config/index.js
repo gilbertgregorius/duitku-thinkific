@@ -1,50 +1,45 @@
 const redisConfig = require('./redis');
 const oauthConfig = require('./oauth');
-const apisConfig = require('./apis');
+const duitkuConfig = require('./duitku');
+const thinkificConfig = require('./thinkific');
+const webhookConfig = require('./webhook');
 
 module.exports = {
-  // Legacy compatibility - keeping old structure
-  database: {
-    host: process.env.DB_HOST || 'localhost',
-    port: process.env.DB_PORT || 5432,
-    database: process.env.DB_NAME || 'course_enrollment',
-    username: process.env.DB_USERNAME || 'postgres',
-    password: process.env.DB_PASSWORD || 'password'
-  },
-  redis: {
-    host: process.env.REDIS_HOST || 'localhost',
-    port: process.env.REDIS_PORT || 6379,
-    password: process.env.REDIS_PASSWORD,
-    url: process.env.REDIS_URL || 'redis://localhost:6379'
-  },
-  duitku: {
-    merchantCode: process.env.DUITKU_MERCHANT_CODE,
-    apiKey: process.env.DUITKU_API_KEY,
-    environment: process.env.DUITKU_ENVIRONMENT || 'sandbox'
-  },
-  thinkific: {
-    apiKey: process.env.THINKIFIC_API_KEY,
-    subdomain: process.env.THINKIFIC_SUBDOMAIN
-  },
-  app: {
-    baseUrl: process.env.APP_BASE_URL || 'http://localhost:3000',
-    logLevel: process.env.LOG_LEVEL || 'info'
-  },
+  // Server configuration
   server: {
     port: process.env.PORT || 3000,
     environment: process.env.NODE_ENV || 'development'
   },
   
-  // New modular configs
+  // App configuration
+  app: {
+    baseUrl: process.env.APP_BASE_URL || 'http://localhost:3000',
+    logLevel: process.env.LOG_LEVEL || 'info'
+  },
+
+  // Legacy database config (if still needed)
+  database: {
+    host: process.env.DB_HOST || 'localhost',
+    port: process.env.DB_PORT || 5432,
+    database: process.env.DB_NAME || 'duitku_thinkific',
+    username: process.env.DB_USERNAME || 'postgres',
+    password: process.env.DB_PASSWORD || 'password'
+  },
+  
+  // Modular configurations
   redisConfig,
   oauthConfig,
-  apisConfig,
+  duitkuConfig,
+  thinkificConfig,
+  webhookConfig,
 
   // Validation method
   validate() {
     try {
       oauthConfig.validate();
-      apisConfig.validate();
+      duitkuConfig.validate();
+      thinkificConfig.validate();
+      webhookConfig.validate();
       return true;
     } catch (error) {
       throw error;
@@ -59,10 +54,15 @@ module.exports = {
         environment: this.server.environment,
         nodeVersion: process.version
       },
+      app: {
+        baseUrl: this.app.baseUrl,
+        logLevel: this.app.logLevel
+      },
       oauth: oauthConfig.getDebugInfo(),
-      apis: apisConfig.getDebugInfo(),
+      duitku: duitkuConfig.getDebugInfo(),
+      thinkific: thinkificConfig.getDebugInfo(),
+      webhook: webhookConfig.getDebugInfo(),
       redis: {
-        url: this.redis.url,
         connected: redisConfig.isConnected
       }
     };

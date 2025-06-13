@@ -10,17 +10,18 @@ class OAuthConfig {
     this.responseType = 'code id_token';
     this.responseMode = 'query';
     this.codeChallengeMethod = 'S256';
+    this.redirectPath = '/oauth/callback';
   }
 
   validate() {
-    const missing = [];
+    const errors = [];
     
-    if (!this.clientId) missing.push('THINKIFIC_CLIENT_ID');
-    if (!this.clientSecret) missing.push('THINKIFIC_CLIENT_SECRET');
-    if (!this.baseUrl) missing.push('APP_BASE_URL');
+    if (!this.clientId) errors.push('THINKIFIC_CLIENT_ID');
+    if (!this.clientSecret) errors.push('THINKIFIC_CLIENT_SECRET');
+    if (!this.baseUrl) errors.push('APP_BASE_URL');
     
-    if (missing.length > 0) {
-      throw new Error(`Missing OAuth configuration: ${missing.join(', ')}`);
+    if (errors.length > 0) {
+      throw new Error(`OAuth configuration errors - missing: ${errors.join(', ')}`);
     }
 
     // Validate base URL format
@@ -30,9 +31,8 @@ class OAuthConfig {
   }
 
   getRedirectUri() {
-    // Ensure no double slashes in the URL
     const baseUrl = this.baseUrl.endsWith('/') ? this.baseUrl.slice(0, -1) : this.baseUrl;
-    return `${baseUrl}/oauth/callback`;
+    return `${baseUrl}${this.redirectPath}`;
   }
 
   getAuthorizationUrl(subdomain, state, codeChallenge) {
