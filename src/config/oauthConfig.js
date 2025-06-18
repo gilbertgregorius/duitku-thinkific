@@ -6,8 +6,17 @@ class OAuthConfig {
     this.clientId = process.env.THINKIFIC_CLIENT_ID;
     this.clientSecret = process.env.THINKIFIC_CLIENT_SECRET;
     this.baseUrl = process.env.APP_BASE_URL;
-    this.scopes = ['openid'];
-    this.responseType = 'code id_token';
+    // Updated scopes to include user management and all necessary permissions
+    this.scopes = [
+      'read:users',           // To access /users/me endpoint
+      'write:enrollments',    // To create enrollments
+      'write:external_orders', // To create external orders
+      'read:orders',          // To read orders
+      'write:courses',        // To access courses
+      'read:courses',         // To read course data
+      'read:products'         // To read products data
+    ];
+    this.responseType = 'code';  // Changed from 'code id_token' to just 'code' for non-OIDC
     this.responseMode = 'query';
     this.codeChallengeMethod = 'S256';
     this.redirectPath = '/oauth/callback';

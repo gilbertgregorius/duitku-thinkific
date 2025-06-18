@@ -2,41 +2,45 @@ const axios = require('axios');
 const crypto = require('crypto');
 const logger = require('../utils/logger');
 
-class DuitkuService {
-  constructor(config) {
-    // Use the new APIs config if available, fallback to legacy config
-    if (config.apis && config.apis.duitku) {
-      // New modular approach
-      this.merchantCode = config.apis.duitku.merchantCode;
-      this.apiKey = config.apis.duitku.apiKey;
-      this.baseUrl = config.apis.duitku.baseUrl;
-      this.environment = config.apis.duitku.environment;
-      this.timeout = config.apis.duitku.timeout;
-    } else {
-      // Legacy approach compatibility
-      this.merchantCode = config.merchantCode;
-      this.apiKey = config.apiKey;
-      this.baseUrl = config.environment === 'production' 
-        ? 'https://passport.duitku.com'
-        : 'https://sandbox.duitku.com';
-      this.environment = config.environment;
-      this.timeout = 30000;
+class Duitku {
+  constructor(config = null) {
+    // If no config provided, load it automatically
+    if (!config) {
+      try {
+        const appConfig = require('../config');
+        config = appConfig.duitkuConfig;
+      } catch (error) {
+        throw new Error('DuitkuService requires a configuration object or valid config file');
+      }
     }
+
+    this.merchantCode = config.merchantCode;
+    this.apiKey = config.apiKey;
+    this.environment = config.environment;
+    this.baseUrl = config.baseUrl;
+    this.timeout = config.timeout;
+    this.webhookPath = config.webhookPath;
+
   }
 
-  generateOrderId() {
-    const timestamp = Date.now();
-    const randomStr = Math.random().toString(36).substr(2, 9).toUpperCase();
-    return `COURSE_${timestamp}_${randomStr}`;
+  ///////////////////////
+  /// HELPER FUNCTION ///
+  ///////////////////////
+
+  generateSignature(merchantCode, timestamp, apiKey) {
+    const signatureString = `${merchantCode}${timestamp}${apiKey}`;
+    return crypto.createHash('sha256').update(signatureString).digest('hex');
   }
 
-  generateSignature(merchantCode, orderId, amount, apiKey) {
-    const signatureString = `${merchantCode}${orderId}${amount}${apiKey}`;
-    return crypto.createHash('md5').update(signatureString).digest('hex');
+  getJakartaTimestamp() {
+    const now = new Date();
+    // Jakarta is UTC+7
+    const jakartaTime = new Date(now.getTime() + (7 * 60 * 60 * 1000));
+    return jakartaTime.getTime();
   }
 
   verifyWebhookSignature(data) {
-    const { merchantOrderId, amount, signature: receivedSignature } = data;
+    const { merchantOrderId, amount, receivedSignature } = data;
     const signatureString = `${this.merchantCode}${amount}${merchantOrderId}${this.apiKey}`;
     const calculatedSignature = crypto.createHmac('md5', this.apiKey)
       .update(signatureString)
@@ -45,30 +49,29 @@ class DuitkuService {
     return calculatedSignature.toLowerCase() === receivedSignature.toLowerCase();
   }
 
+  ///////////////////
+  /// MAIN METHOD ///
+  ///////////////////
   async initiatePayment(paymentData) {
     try {
-      const orderId = this.generateOrderId();
-      const amount = paymentData.coursePrice || paymentData.amount;
-      const signature = this.generateSignature(
-        this.merchantCode, 
-        orderId, 
-        amount, 
-        this.apiKey
-      );
+      const orderId = paymentData.orderId;
+      const amount = paymentData.amount;
+      const timestamp = this.getJakartaTimestamp();
+      const signature = this.generateSignature(this.merchantCode, timestamp, this.apiKey);
       
       const requestData = {
         merchantCode: this.merchantCode,
         paymentAmount: amount,
         paymentMethod: paymentData.paymentMethod,
         merchantOrderId: orderId,
-        productDetails: paymentData.courseDescription || paymentData.courseName,
+        productDetails: paymentData.productName,
         customerVaName: paymentData.customerName,
         email: paymentData.customerEmail,
         phoneNumber: paymentData.customerPhone.replace(/\D/g, ''),
         itemDetails: [{
-          name: paymentData.courseName,
+          name: paymentData.productName,
           price: amount,
-          quantity: 1
+          quantity: 1 // TODO: parse from paymentData
         }],
         customerDetail: {
           firstName: paymentData.customerName.split(' ')[0],
@@ -88,7 +91,10 @@ class DuitkuService {
         {
           headers: {
             'Content-Type': 'application/json',
-            'Accept': 'application/json'
+            'Accept': 'application/json',
+            'x-duitku-signature': signature,
+            'x-duitku-timestamp': timestamp.toString(),
+            'x-duitku-merchantcode': this.merchantCode
           },
           timeout: 30000
         }
@@ -103,10 +109,8 @@ class DuitkuService {
         orderId,
         reference: response.data.reference,
         paymentUrl: response.data.paymentUrl,
-        vaNumber: response.data.vaNumber,
-        qrString: response.data.qrString,
-        expiredDate: response.data.expiredDate,
-        instructions: response.data.paymentInstructions
+        statusCode: response.data.statusCode,
+        statusMessage: response.data.statusMessage,
       };
 
     } catch (error) {
@@ -116,4 +120,4 @@ class DuitkuService {
   }
 }
 
-module.exports = DuitkuService;
+module.exports = new Duitku();

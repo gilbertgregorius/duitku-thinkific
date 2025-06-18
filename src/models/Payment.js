@@ -19,7 +19,7 @@ const Payment = sequelize.define('Payment', {
       key: 'id'
     }
   },
-  courseId: {
+  productId: {
     type: DataTypes.STRING,
     allowNull: false
   },

@@ -83,7 +83,7 @@ class RedisConfig {
       }
       return true;
     } catch (error) {
-      logger.error('Redis SET error:', error);
+      logger.error('Redis SET error:', error.message);
       return false;
     }
   }
@@ -94,7 +94,7 @@ class RedisConfig {
       const value = await client.get(key);
       return value ? JSON.parse(value) : null;
     } catch (error) {
-      logger.error('Redis GET error:', error);
+      logger.error('Redis GET error:', error.message);
       return null;
     }
   }
@@ -104,7 +104,7 @@ class RedisConfig {
       const client = this.getClient();
       return await client.del(key);
     } catch (error) {
-      logger.error('Redis DEL error:', error);
+      logger.error('Redis DEL error:', error.message);
       return false;
     }
   }
@@ -114,7 +114,7 @@ class RedisConfig {
       const client = this.getClient();
       return await client.exists(key);
     } catch (error) {
-      logger.error('Redis EXISTS error:', error);
+      logger.error('Redis EXISTS error:', error.message);
       return false;
     }
   }
@@ -124,7 +124,7 @@ class RedisConfig {
       const client = this.getClient();
       return await client.expire(key, seconds);
     } catch (error) {
-      logger.error('Redis EXPIRE error:', error);
+      logger.error('Redis EXPIRE error:', error.message);
       return false;
     }
   }
@@ -134,7 +134,7 @@ class RedisConfig {
       const client = this.getClient();
       return await client.flushAll();
     } catch (error) {
-      logger.error('Redis FLUSHALL error:', error);
+      logger.error('Redis FLUSHALL error:', error.message);
       return false;
     }
   }
@@ -154,7 +154,4 @@ class RedisConfig {
   }
 }
 
-// Singleton instance
-const redisConfig = new RedisConfig();
-
-module.exports = redisConfig;
+module.exports = new RedisConfig();

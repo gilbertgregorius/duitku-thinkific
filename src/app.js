@@ -4,16 +4,21 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
-require('dotenv').config();
+
+// Load environment variables based on NODE_ENV
+if (process.env.NODE_ENV === 'test') {
+  require('dotenv').config({ path: '.env.test' });
+} else {
+  require('dotenv').config();
+}
 
 const logger = require('./utils/logger.js');
-const config = require('./config/index.js');
 const paymentRoutes = require('./routes/payment.js');
 const webhookRoutes = require('./routes/webhooks.js');
 const enrollmentRoutes = require('./routes/enrollment.js');
 const oauthRoutes = require('./routes/oauth.js');
 const settingsRoutes = require('./routes/settings.js');
-const newRoutes = require('./routes/new.js');
+const newRoutes = require('./routes/paymentNew.js');
 
 // GraphQL setup
 const createApolloServer = require('../graphql');
@@ -82,10 +87,7 @@ app.use('/api/webhooks', webhookRoutes);
 app.use('/api/enrollment', enrollmentRoutes);
 app.use('/oauth', oauthRoutes);
 app.use('/settings', settingsRoutes);
-app.use('/orders', require('./routes/orders.js'));
 app.use('/enrollments', enrollmentRoutes);
-
-// New Thinkific integration routes
 app.use('/payment', newRoutes);
 
 // Error handling middleware
@@ -97,17 +99,32 @@ app.use((err, req, res, next) => {
   });
 });
 
-// 404 handler
-app.use('*', (req, res) => {
-  res.status(404).json({ error: 'Route not found' });
-});
+// Note: 404 handler is added after GraphQL setup in setupGraphQL()
 
 const PORT = process.env.PORT || 3000;
+
+// Initialize GraphQL immediately when module is loaded
+let graphqlInitialized = false;
+let graphqlPromise = null;
+
+async function initializeGraphQL() {
+  if (!graphqlInitialized && !graphqlPromise) {
+    graphqlPromise = setupGraphQL().then(() => {
+      graphqlInitialized = true;
+    });
+  }
+  if (graphqlPromise) {
+    await graphqlPromise;
+  }
+}
+
+// Expose a function to wait for GraphQL initialization
+app.waitForGraphQL = initializeGraphQL;
 
 // Initialize GraphQL and start server
 async function startServer() {
   try {
-    await setupGraphQL();
+    await initializeGraphQL();
     app.listen(PORT, () => {
       logger.info(`Server running on port ${PORT}`);
       logger.info(`GraphQL playground available at http://localhost:${PORT}/graphql`);
@@ -118,6 +135,14 @@ async function startServer() {
   }
 }
 
-startServer();
+// Initialize GraphQL when module is loaded (for tests)
+if (process.env.NODE_ENV === 'test') {
+  initializeGraphQL().catch(console.error);
+}
+
+// Only start server if this file is run directly
+if (require.main === module) {
+  startServer();
+}
 
 module.exports = app;

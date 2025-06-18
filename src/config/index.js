@@ -1,8 +1,9 @@
-const redisConfig = require('./redis');
-const oauthConfig = require('./oauth');
-const duitkuConfig = require('./duitku');
-const thinkificConfig = require('./thinkific');
-const webhookConfig = require('./webhook');
+const redisConfig = require('./redisConfig');
+const oauthConfig = require('./oauthConfig');
+const duitkuConfig = require('./duitkuConfig');
+const thinkificConfig = require('./thinkificConfig');
+const webhookConfig = require('./webhookConfig');
+const dataStoreConfig = require('./dataStoreConfig');
 
 module.exports = {
   // Server configuration
@@ -16,15 +17,6 @@ module.exports = {
     baseUrl: process.env.APP_BASE_URL || 'http://localhost:3000',
     logLevel: process.env.LOG_LEVEL || 'info'
   },
-
-  // Legacy database config (if still needed)
-  database: {
-    host: process.env.DB_HOST || 'localhost',
-    port: process.env.DB_PORT || 5432,
-    database: process.env.DB_NAME || 'duitku_thinkific',
-    username: process.env.DB_USERNAME || 'postgres',
-    password: process.env.DB_PASSWORD || 'password'
-  },
   
   // Modular configurations
   redisConfig,
@@ -32,6 +24,7 @@ module.exports = {
   duitkuConfig,
   thinkificConfig,
   webhookConfig,
+  dataStoreConfig,
 
   // Validation method
   validate() {
@@ -40,6 +33,7 @@ module.exports = {
       duitkuConfig.validate();
       thinkificConfig.validate();
       webhookConfig.validate();
+      dataStoreConfig.validateForProduction();
       return true;
     } catch (error) {
       throw error;
@@ -62,6 +56,7 @@ module.exports = {
       duitku: duitkuConfig.getDebugInfo(),
       thinkific: thinkificConfig.getDebugInfo(),
       webhook: webhookConfig.getDebugInfo(),
+      dataStore: dataStoreConfig.getDebugInfo(),
       redis: {
         connected: redisConfig.isConnected
       }

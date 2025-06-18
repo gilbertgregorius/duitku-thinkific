@@ -1,13 +1,11 @@
 const Payment = require('../src/models/Payment');
 const User = require('../src/models/User');
-const DuitkuService = require('../src/services/duitkuService');
-const ThinkificService = require('../src/services/thinkificServices');
-const logger = require('../src/utils/logger');
-const config = require('../src/config');
 
-// Initialize services
-const duitkuService = new DuitkuService(config.duitkuConfig);
-const thinkificService = new ThinkificService(config.thinkificConfig);
+const logger = require('../src/utils/logger');
+
+const duitku = require('../src/services/duitku');
+const thinkific = require('../src/services/thinkific');
+
 
 const resolvers = {
   Query: {
@@ -42,23 +40,47 @@ const resolvers = {
       }
     },
 
-    course: async (_, { courseId, subdomain }) => {
+    product: async (_, { productId, subdomain }) => {
       try {
         const user = await User.findOne({ where: { subdomain } });
         if (!user) throw new Error('User not found');
         
-        return await thinkificService.getCourse(user.accessToken, courseId);
+        return await thinkific.getProduct(user.accessToken, productId);
       } catch (error) {
-        logger.error('Error fetching course:', error);
-        throw new Error('Failed to fetch course');
+        logger.error('Error fetching product:', error);
+        throw new Error('Failed to fetch product');
       }
+    },
+
+    products: async (_, { subdomain }) => {
+      try {
+        const user = await User.findOne({ where: { subdomain } });
+        if (!user) throw new Error('User not found');
+        
+        const productsResponse = await thinkific.getProducts(user.accessToken);
+        return productsResponse.items || [];
+      } catch (error) {
+        logger.error('Error fetching products:', error);
+        throw new Error('Failed to fetch products');
+      }
+    }
+  },
+
+  Product: {
+    price: (product) => {
+      // Get price from the primary product_price or fallback to product.price
+      const primaryPrice = product.product_prices?.find(p => p.is_primary);
+      if (primaryPrice) {
+        return parseFloat(primaryPrice.price) || 0;
+      }
+      return parseFloat(product.price) || 0;
     }
   },
 
   Mutation: {
     createPayment: async (_, { input }) => {
       try {
-        const { courseId, amount, subdomain, customerEmail } = input;
+        const { productId, amount, subdomain, customerEmail } = input;
         
         const user = await User.findOne({ where: { subdomain } });
         if (!user) {
@@ -67,16 +89,35 @@ const resolvers = {
 
         const orderId = `ORDER-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
         
-        // Create external order in Thinkific
-        const thinkificOrder = await thinkificService.createExternalOrder({
+        // Try to get or create user in Thinkific first
+        // TODO: REMOVE IN PRODUCTION; USER CREATION IS NOT SCOPE OF THIS PROJECT
+        let thinkificUserId;
+        try {
+          const thinkificUser = await thinkific.createUser(user.accessToken, {
+            email: customerEmail || `${subdomain}@thinkific.com`,
+            firstName: 'Test',
+            lastName: 'User'
+          });
+          
+          thinkificUserId = thinkificUser.id;
+          logger.info('GraphQL: Thinkific user resolved:', { id: thinkificUserId, email: customerEmail });
+          
+        } catch (error) {
+          logger.error('GraphQL: Failed to create/get Thinkific user:', error.message);
+          return { success: false, error: 'Failed to create user in Thinkific' };
+        }
+        
+        // Create external order in Thinkific using the provided productId
+        const thinkificOrder = await thinkific.createExternalOrder({
           accessToken: user.accessToken,
-          courseId,
+          productId: productId,
           amount,
-          orderId
+          orderId,
+          userId: thinkificUserId,
         });
         
         // Create payment in Duitku
-        const duitkuPayment = await duitkuService.createPayment({
+        const duitkuPayment = await duitku.initiatePayment({
           orderId,
           amount,
           customerEmail: customerEmail || `${subdomain}@thinkific.com`
@@ -86,7 +127,7 @@ const resolvers = {
         await Payment.create({
           orderId,
           userId: user.id,
-          courseId,
+          productId, // Changed from courseId to productId
           amount,
           paymentUrl: duitkuPayment.paymentUrl,
           duitkuReference: duitkuPayment.reference,
@@ -99,11 +140,14 @@ const resolvers = {
           orderId
         };
       } catch (error) {
-        logger.error('Payment creation failed:', error);
+        logger.error('Payment creation failed:', {
+          orderId,
+          error: error.message
+        });
         return { success: false, error: 'Payment creation failed' };
       }
     },
-
+    
     updatePaymentStatus: async (_, { orderId, status }) => {
       try {
         const [updatedRows] = await Payment.update(
@@ -117,7 +161,10 @@ const resolvers = {
         
         return await Payment.findOne({ where: { orderId } });
       } catch (error) {
-        logger.error('Error updating payment status:', error);
+        logger.error('Error updating payment status:', {
+          orderId,
+          error: error.message
+        });
         throw new Error('Failed to update payment status');
       }
     }

@@ -1,16 +1,8 @@
 const logger = require('../utils/logger');
-const DuitkuService = require('../services/duitkuService');
-const ThinkificService = require('../services/thinkificServices');
-const DataStore = require('../services/dataStore');
-const EnrollmentController = require('./enrollmentController');
-const config = require('../config');
-const apisConfig = require('../config/apis');
+const enrollCtrl = require('./enrollmentController');
 const crypto = require('crypto');
 
-// Use the new APIs config for services
-const duitkuService = new DuitkuService(apisConfig);
-const thinkificService = new ThinkificService(apisConfig.thinkific);
-const dataStore = new DataStore();
+const dataStore = require('../services/dataStore');
 
 class WebhookController {
   
@@ -322,9 +314,9 @@ class WebhookController {
         customerName: payment.customer_name,
         customerEmail: payment.customer_email,
         customerPhone: payment.customer_phone,
-        courseName: payment.course_name,
-        courseDescription: payment.course_description,
-        coursePrice: payment.amount,
+        productName: payment.product_name,
+        productDescription: payment.product_description,
+        amount: payment.amount,
         orderId: merchantOrderId,
         reconstructed: true
       };
@@ -332,7 +324,7 @@ class WebhookController {
     
     if (customerData) {
       // Process enrollment with enhanced data
-      const enrollmentResult = await EnrollmentController.processEnrollment(payment, {
+      const enrollmentResult = await enrollCtrl.processEnrollment(payment, {
         ...customerData,
         paymentRecord
       });
@@ -411,7 +403,7 @@ class WebhookController {
         logger.info('Thinkific enrollment processed', {
           enrollmentId: enrollmentResult.extractedData?.enrollment?.id,
           userEmail: enrollmentResult.extractedData?.user?.email,
-          courseName: enrollmentResult.extractedData?.course?.name,
+          productName: enrollmentResult.extractedData?.product?.name,
           processingTime: Date.now() - startTime
         });
 
@@ -576,5 +568,5 @@ class WebhookController {
     }
   }
 }
-
-module.exports = new WebhookController();
+ 
+module.exports = new WebhookController(); 

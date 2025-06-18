@@ -5,9 +5,13 @@ class ThinkificConfig {
   constructor() {
     this.apiKey = process.env.THINKIFIC_API_KEY;
     this.subdomain = process.env.THINKIFIC_SUBDOMAIN;
-    this.baseUrl = 'https://api.thinkific.com/api/v1';
+    this.baseUrl = 'https://api.thinkific.com/api/public/v1';
     this.timeout = 15000;
     this.webhookPath = '/webhooks/thinkific';
+  }
+
+  getNodeEnv() {
+    return process.env.NODE_ENV;
   }
 
   getWebhookUrl() {

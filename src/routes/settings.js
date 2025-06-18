@@ -36,21 +36,4 @@ router.post('/', async (req, res) => {
   }
 });
 
-// Test connection
-router.post('/test-connection', async (req, res) => {
-  try {
-    // Test Duitku connection
-    const duitkuService = require('../services/duitkuService');
-    const thinkificService = require('../services/thinkificServices');
-    
-    // You can add actual connection tests here
-    logger.info('Connection test initiated');
-    
-    res.json({ message: 'Connection test successful' });
-  } catch (error) {
-    logger.error('Connection test failed:', error);
-    res.status(500).json({ error: 'Connection test failed' });
-  }
-});
-
 module.exports = router;

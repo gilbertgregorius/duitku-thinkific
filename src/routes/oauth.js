@@ -3,9 +3,23 @@ const crypto = require('crypto');
 const axios = require('axios');
 const router = express.Router();
 const logger = require('../utils/logger');
-const oauthConfig = require('../config/oauth');
-const redisConfig = require('../config/redis');
+const oauthConfig = require('../config/oauthConfig');
+const redisConfig = require('../config/redisConfig');
 const ErrorHandler = require('../middleware/errorHandler');
+const User = require('../models/User'); // Add User model
+
+// Store code verifiers in Redis for cross-process sharing
+const redis = require('redis');
+let redisClient = null;
+
+// Initialize Redis client
+async function getRedisClient() {
+  if (!redisClient) {
+    redisClient = redis.createClient({ url: process.env.REDIS_URL || 'redis://localhost:6379' });
+    await redisClient.connect();
+  }
+  return redisClient;
+}
 
 // Store code verifiers in Redis instead of memory
 const getCodeVerifierKey = (state) => `oauth:verifier:${state}`;
@@ -39,7 +53,7 @@ router.get('/debug', ErrorHandler.asyncHandler(async (req, res) => {
 }));
 
 // INSTALL ENDPOINT - following THINKIFIC_OAUTH_API.md pattern
-router.get('/install', (req, res) => {
+router.get('/install', async (req, res) => {
     try {
         const subdomain = req.query.subdomain;
         
@@ -47,10 +61,10 @@ router.get('/install', (req, res) => {
             return res.status(400).json({ error: 'subdomain parameter is required' });
         }
 
-        // GENERATE RANDOM STRING FOR CODE VERIFIER (128 chars as per doc)
+        // GENERATE RANDOM STRING FOR CODE VERIFIER (128 chars as per PKCE doc)
         const code_verifier = crypto.randomBytes(96).toString('base64url'); // 128 chars
         
-        // HASHED CODE VERIFIER VIA S256 METHOD & BASE64 ENCODE
+        // HASHED CODE VERIFIER VIA S256 METHOD & BASE64 ENCODE (PKCE)
         const base64Digest = crypto
             .createHash('sha256')
             .update(code_verifier)
@@ -58,12 +72,18 @@ router.get('/install', (req, res) => {
         
         const code_challenge = base64Digest.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
         const state = code_verifier; // Use code_verifier as state as shown in doc
+        
         // Fix potential double slash issue
         const baseUrl = process.env.APP_BASE_URL.endsWith('/') ? process.env.APP_BASE_URL.slice(0, -1) : process.env.APP_BASE_URL;
         const redirect_uri = `${baseUrl}/oauth/callback`;
 
-        // Store code verifier with state as key
-        codeVerifiers.set(state, { code_verifier, subdomain });
+        // Store code verifier with state as key in Redis
+        const client = await getRedisClient();
+        await client.setEx(getCodeVerifierKey(state), 600, JSON.stringify({ 
+            code_verifier,
+            subdomain,
+            created_at: Date.now()
+        })); // Expire in 10 minutes
 
         logger.info('OAuth install initiated', {
             subdomain,
@@ -71,16 +91,15 @@ router.get('/install', (req, res) => {
             redirect_uri
         });
 
-        // Build authorization URL exactly as shown in THINKIFIC_OAUTH_API.md
+        // Build authorization URL with PKCE for OAuth 2.0 (NOT OIDC)
         const authUrl = `https://${subdomain}.thinkific.com/oauth2/authorize?` +
             `client_id=${process.env.THINKIFIC_CLIENT_ID}&` +
             `redirect_uri=${encodeURIComponent(redirect_uri)}&` +
             `state=${state}&` +
             `response_mode=query&` +
-            `response_type=code id_token&` +
+            `response_type=code&` + // Pure OAuth 2.0, not OIDC
             `code_challenge=${code_challenge}&` +
-            `code_challenge_method=S256&` +
-            `scope=openid`;
+            `code_challenge_method=S256`; // PKCE with S256
 
         res.redirect(authUrl);
 
@@ -101,22 +120,26 @@ router.get('/callback', async (req, res) => {
             });
         }
 
-        // Retrieve stored code verifier
-        const storedData = codeVerifiers.get(state);
-        if (!storedData) {
+        // Retrieve stored state info from Redis
+        const client = await getRedisClient();
+        const storedDataJson = await client.get(getCodeVerifierKey(state));
+        
+        if (!storedDataJson) {
+            logger.error('OAuth callback: Invalid or expired state parameter', { state: state.substring(0, 10) + '...' });
             return res.status(400).json({ error: 'Invalid or expired state parameter' });
         }
 
-        const { code_verifier } = storedData;
+        const storedData = JSON.parse(storedDataJson);
+        const { code_verifier } = storedData; // Extract code_verifier for PKCE
         
-        // Clean up stored verifier
-        codeVerifiers.delete(state);
+        // Clean up stored state
+        await client.del(getCodeVerifierKey(state));
 
-        // Exchange authorization code for access token - exactly as in doc
+        // Exchange authorization code for access token with PKCE - exactly as in doc
         const json = JSON.stringify({
             grant_type: 'authorization_code',
             code: code,
-            code_verifier: code_verifier
+            code_verifier: code_verifier // Required for PKCE
         });
 
         // Create Basic Auth header - exactly as in doc  
@@ -129,14 +152,51 @@ router.get('/callback', async (req, res) => {
             {
                 headers: {
                     'Authorization': `Basic ${authKey}`,
-                    'Content-Type': 'application/json'
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'DuitkuThinkific/1.0.0' // Required by Thinkific API
                 }
             }
         );
 
         const { access_token, refresh_token, expires_in, gid } = tokenResponse.data;
 
-        // Store installation data
+        // DEBUG: Log token details
+        logger.info('OAuth token response received', {
+            access_token_length: access_token?.length,
+            access_token_preview: access_token?.substring(0, 50) + '...',
+            access_token_type: access_token?.includes('.') ? 'JWT' : 'UUID',
+            refresh_token_length: refresh_token?.length,
+            gid,
+            expires_in,
+            service: 'course-enrollment'
+        });
+
+        // Calculate expiry date
+        const expiresAt = new Date(Date.now() + (expires_in * 1000));
+
+        // Store user in database using Sequelize model
+        const [user, created] = await User.findOrCreate({
+            where: { subdomain },
+            defaults: {
+                subdomain,
+                gid,
+                accessToken: access_token,
+                refreshToken: refresh_token,
+                expiresAt
+            }
+        });
+
+        // If user already exists, update with new tokens
+        if (!created) {
+            await user.update({
+                gid,
+                accessToken: access_token,
+                refreshToken: refresh_token,
+                expiresAt
+            });
+        }
+
+        // Store installation data in global map as backup
         const installationData = {
             subdomain,
             access_token,
@@ -156,7 +216,9 @@ router.get('/callback', async (req, res) => {
             gid,
             expires_in,
             has_access_token: !!access_token,
-            has_id_token: !!id_token
+            has_id_token: !!id_token,
+            user_created: created,
+            user_id: user.id
         });
 
         // Redirect to success page - will implement React frontend later

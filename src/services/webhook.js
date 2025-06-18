@@ -1,70 +1,74 @@
 const logger = require('../utils/logger');
-const redisConfig = require('../config/redis');
-const apisConfig = require('../config/apis');
 
 /**
  * Centralized webhook service for handling all webhook operations
  */
-class WebhookService {
-  constructor() {
-    this.redis = redisConfig;
-    this.config = apisConfig;
+class Webhook {
+  constructor(config = null) {
+  // If no config provided, load it automatically
+  if (!config) {
+    try {
+      const appConfig = require('../config');
+      config = appConfig.redisConfig;
+    } catch (error) {
+      throw new Error('WebhookService requires a configuration object or valid config file');
+    }
   }
-
+  
+  this.redis = config;
+  }
   /**
    * Process Duitku payment callback
    */
   async processDuitkuCallback(webhookData) {
     try {
       const { 
-        merchantOrderId, 
-        amount, 
-        resultCode, 
-        merchantUserId,
+        merchantCode, 
         reference,
-        signature 
+        paymentUrl,
+        statusCode,
+        statusMessage,
       } = webhookData;
 
       logger.info('Processing Duitku webhook callback', {
-        merchantOrderId,
-        amount,
-        resultCode,
-        reference
+        merchantCode,
+        reference,
+        paymentUrl,
+        statusCode,
+        statusMessage
       });
 
       // Store webhook data in Redis for processing
-      const webhookKey = `webhook:duitku:${merchantOrderId}`;
+      const webhookKey = `webhook:duitku:${reference}`;
       await this.redis.set(webhookKey, {
         ...webhookData,
         processed: false,
         receivedAt: new Date().toISOString()
       }, 3600); // 1 hour TTL
 
-      // Determine payment status
-      const paymentStatus = this.mapDuitkuStatus(resultCode);
       
       // Get order data from Redis
-      const orderKey = `order:${merchantOrderId}`;
+      const orderKey = `order:${reference}`;
       const orderData = await this.redis.get(orderKey);
 
       if (!orderData) {
-        logger.error('Order not found for Duitku callback', { merchantOrderId });
-        throw new Error(`Order ${merchantOrderId} not found`);
+        logger.error('Order not found for Duitku callback', { reference });
+        throw new Error(`Order ${reference} not found`);
       }
 
       // Update order status
       const updatedOrder = {
         ...orderData,
-        status: paymentStatus,
+        status: statusMessage,
         duitku_reference: reference,
-        payment_completed_at: paymentStatus === 'completed' ? new Date().toISOString() : null,
+        payment_completed_at: statusMessage === 'Success' ? new Date().toISOString() : null,
         updated_at: new Date().toISOString()
       };
 
       await this.redis.set(orderKey, updatedOrder);
 
       // If payment successful, trigger enrollment
-      if (paymentStatus === 'completed') {
+      if (statusMessage === 'Success') {
         await this.triggerEnrollment(updatedOrder);
       }
 
@@ -77,13 +81,13 @@ class WebhookService {
       }, 3600);
 
       logger.info('Duitku webhook processed successfully', {
-        merchantOrderId,
+        merchantCode,
         status: paymentStatus
       });
 
       return {
         success: true,
-        orderId: merchantOrderId,
+        orderId: merchantCode,
         status: paymentStatus
       };
 
@@ -152,20 +156,6 @@ class WebhookService {
     }
   }
 
-  /**
-   * Map Duitku result codes to our internal status
-   */
-  mapDuitkuStatus(resultCode) {
-    const statusMap = {
-      '00': 'completed',    // Success
-      '01': 'pending',      // Pending
-      '02': 'failed',       // Failed
-      '03': 'cancelled',    // Cancelled
-      '04': 'expired'       // Expired
-    };
-
-    return statusMap[resultCode] || 'unknown';
-  }
 
   /**
    * Trigger enrollment after successful payment
@@ -416,4 +406,4 @@ class WebhookService {
   }
 }
 
-module.exports = new WebhookService();
+module.exports = new Webhook();

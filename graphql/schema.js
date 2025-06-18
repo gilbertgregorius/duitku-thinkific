@@ -16,7 +16,7 @@ const typeDefs = gql`
     id: ID!
     orderId: String!
     userId: ID!
-    courseId: String!
+    productId: String!
     amount: Float!
     currency: String!
     status: PaymentStatus!
@@ -35,11 +35,26 @@ const typeDefs = gql`
     expired
   }
 
-  type Course {
+  type ProductPrice {
     id: String!
-    title: String!
+    is_primary: Boolean!
+    payment_type: String!
+    price: String!
+    currency: String!
+    price_name: String
+  }
+
+  type Product {
+    id: String!
+    name: String!
     description: String
     price: Float!
+    status: String!
+    productable_id: String!
+    productable_type: String!
+    slug: String
+    card_image_url: String
+    product_prices: [ProductPrice!]!
   }
 
   type PaymentResponse {
@@ -53,7 +68,8 @@ const typeDefs = gql`
     user(subdomain: String!): User
     payment(orderId: String!): Payment
     payments(userId: ID, status: PaymentStatus): [Payment!]!
-    course(courseId: String!, subdomain: String!): Course
+    product(productId: String!, subdomain: String!): Product
+    products(subdomain: String!): [Product!]!
   }
 
   type Mutation {
@@ -62,7 +78,7 @@ const typeDefs = gql`
   }
 
   input CreatePaymentInput {
-    courseId: String!
+    productId: String!
     amount: Float!
     subdomain: String!
     customerEmail: String

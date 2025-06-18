@@ -1,20 +1,15 @@
-const logger = require('../utils/logger.js');
-const DuitkuService = require('../services/duitkuService.js');
-const DataStore = require('../services/dataStore.js');
-const config = require('../config/index.js');
-
-// Add new model imports for Thinkific integration
 const Payment = require('../models/Payment');
 const User = require('../models/User');
-const ThinkificService = require('../services/thinkificServices');
 
-// Use the new configuration for DuitkuService
-const duitkuService = new DuitkuService(config.duitkuConfig);
-const dataStore = new DataStore();
-const thinkificService = new ThinkificService(config.thinkificConfig);
+const logger = require('../utils/logger.js');
+const config = require('../config/index.js');
+
+const duitku = require('../services/duitku.js');
+const dataStore = require('../services/dataStore.js');
+const thinkific = require('../services/thinkific.js');
+
 
 class PaymentController {
-  
   /**
    * Enhanced order ID generation (from Pipedream pattern)
    */
@@ -22,14 +17,14 @@ class PaymentController {
     const timestamp = Date.now();
     const randomStr = Math.random().toString(36).substr(2, 9).toUpperCase();
     const userPrefix = customerEmail ? customerEmail.split('@')[0].substr(0, 3).toUpperCase() : 'USR';
-    return `COURSE_${userPrefix}_${timestamp}_${randomStr}`;
+    return `PRODUCT_${userPrefix}_${timestamp}_${randomStr}`;
   }
 
   /**
    * Enhanced payment validation (from Pipedream approach)
    */
   validatePaymentRequest(paymentData) {
-    const required = ['courseName', 'coursePrice', 'customerName', 'customerEmail', 'paymentMethod'];
+    const required = ['productId', 'amount', 'customerName', 'customerEmail', 'paymentMethod'];
     const missing = required.filter(field => !paymentData[field]);
     
     if (missing.length > 0) {
@@ -51,11 +46,11 @@ class PaymentController {
     }
 
     // Validate amount
-    if (paymentData.coursePrice <= 0) {
+    if (paymentData.amount <= 0) {
       return {
         valid: false,
-        error: 'Course price must be greater than 0',
-        field: 'coursePrice'
+        error: 'Amount must be greater than 0',
+        field: 'amount'
       };
     }
 
@@ -100,28 +95,25 @@ class PaymentController {
           phoneNumber: paymentData.customerPhone?.replace(/\D/g, '') || ''
         },
         itemDetails: [{
-          name: paymentData.courseName,
-          price: paymentData.coursePrice,
+          name: paymentData.productName,
+          price: paymentData.amount,
           quantity: 1
         }]
       };
       
       // Initiate payment with Duitku
-      const result = await duitkuService.initiatePayment(enhancedPaymentData);
+      const result = await duitku.initiatePayment(enhancedPaymentData);
       
       // Enhanced payment record (following Pipedream comprehensive approach)
       const paymentRecord = {
         order_id: result.orderId || customOrderId,
-        course_name: paymentData.courseName,
-        course_description: paymentData.courseDescription,
-        amount: paymentData.coursePrice,
+        payment_url: result.paymentUrl,
+        product_name: paymentData.productName,
+        product_description: paymentData.productDescription,
+        amount: paymentData.amount,
         payment_method: paymentData.paymentMethod,
         status: 'pending',
         duitku_reference: result.reference,
-        payment_url: result.paymentUrl,
-        va_number: result.vaNumber,
-        qr_string: result.qrString,
-        expires_at: result.expiredDate ? new Date(result.expiredDate) : null,
         customer_name: paymentData.customerName,
         customer_email: paymentData.customerEmail,
         customer_phone: paymentData.customerPhone,
@@ -138,9 +130,9 @@ class PaymentController {
         customerName: paymentData.customerName,
         customerEmail: paymentData.customerEmail,
         customerPhone: paymentData.customerPhone,
-        courseName: paymentData.courseName,
-        courseDescription: paymentData.courseDescription,
-        coursePrice: paymentData.coursePrice,
+        productName: paymentData.productName,
+        productDescription: paymentData.productDescription,
+        amount: paymentData.amount,
         paymentMethod: paymentData.paymentMethod,
         orderId: result.orderId || customOrderId,
         initiatedAt: new Date().toISOString(),
@@ -153,8 +145,8 @@ class PaymentController {
       logger.info('Payment initiated successfully', {
         orderId: result.orderId || customOrderId,
         customerEmail: paymentData.customerEmail,
-        courseName: paymentData.courseName,
-        amount: paymentData.coursePrice,
+        productName: paymentData.productName,
+        amount: paymentData.amount,
         paymentMethod: paymentData.paymentMethod,
         processingTime: Date.now() - startTime
       });
@@ -167,12 +159,12 @@ class PaymentController {
         paymentUrl: result.paymentUrl,
         vaNumber: result.vaNumber,
         qrString: result.qrString,
-        amount: paymentData.coursePrice,
+        amount: paymentData.amount,
         paymentMethod: paymentData.paymentMethod,
-        course: {
-          name: paymentData.courseName,
-          description: paymentData.courseDescription,
-          price: paymentData.coursePrice
+        product: {
+          name: paymentData.productName,
+          description: paymentData.productDescription,
+          price: paymentData.amount
         },
         customer: {
           name: paymentData.customerName,
@@ -220,7 +212,7 @@ class PaymentController {
           orderId: payment.order_id,
           status: payment.status,
           amount: payment.amount,
-          courseName: payment.course_name,
+          productName: payment.product_name,
           customerName: payment.user_name,
           customerEmail: payment.user_email,
           paymentMethod: payment.payment_method,
@@ -364,7 +356,7 @@ class PaymentController {
       }
 
       // Enroll the user in the course
-      const enrollment = await thinkificService.enrollUserInCourse(user.thinkificId, courseId);
+      const enrollment = await thinkific.enrollUserInCourse(user.thinkificId, courseId);
 
       if (!enrollment) {
         return res.status(500).json({
@@ -395,19 +387,23 @@ class PaymentController {
   // New methods from newController.js for Thinkific integration
   async showCheckout(req, res) {
     try {
-      const { courseId, subdomain } = req.query;
+      const { productId, subdomain } = req.query;
       
-      // Get course details from Thinkific
+      // Get product details from Thinkific
       const user = await User.findOne({ where: { subdomain } });
       if (!user) {
         return res.status(404).render('error', { error: 'User not found' });
       }
       
-      const course = await thinkificService.getCourse(user.accessToken, courseId);
+      const product = await thinkific.getProduct(user.accessToken, productId);
+      
+      // Get primary price for the product
+      const primaryPrice = product.product_prices?.find(p => p.is_primary);
+      const amount = primaryPrice ? parseFloat(primaryPrice.price) : parseFloat(product.price) || 0;
       
       res.render('payment/checkout', {
-        course,
-        amount: course.price,
+        product,
+        amount,
         subdomain,
         userId: user.id
       });
@@ -419,7 +415,7 @@ class PaymentController {
 
   async createPayment(req, res) {
     try {
-      const { courseId, amount } = req.body;
+      const { productId, amount, customerEmail, customerName } = req.body;
       const { subdomain } = req.query;
       
       const user = await User.findOne({ where: { subdomain } });
@@ -427,28 +423,50 @@ class PaymentController {
         return res.status(404).json({ error: 'User not found' });
       }
 
-      const orderId = `ORDER-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      const orderId = `ORD-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
       
-      // Create external order in Thinkific
-      const thinkificOrder = await thinkificService.createExternalOrder({
+      // Try to get or create user in Thinkific first
+      let thinkificUserId;
+      try {
+        // Since /users/me might not work due to OAuth scopes,
+        // try to create the user first (will return existing if already exists)
+        const thinkificUser = await thinkific.createUser(user.accessToken, {
+          email: customerEmail,
+          firstName: customerName ? customerName.split(' ')[0] : 'Customer',
+          lastName: customerName ? customerName.split(' ').slice(1).join(' ') : 'User'
+        });
+        
+        thinkificUserId = thinkificUser.id;
+        logger.info('Thinkific user resolved:', { id: thinkificUserId, email: customerEmail });
+        
+      } catch (error) {
+        logger.error('Failed to create/get Thinkific user:', error.message);
+        return res.status(500).json({ error: 'Failed to create user in Thinkific' });
+      }
+      
+      // Create external order in Thinkific using the provided productId
+      const thinkificOrder = await thinkific.createExternalOrder({
         accessToken: user.accessToken,
-        courseId,
+        productId: productId,
         amount,
-        orderId
+        orderId,
+        userId: thinkificUserId, // Use the Thinkific user ID
+        userEmail: customerEmail
       });
       
       // Create payment in Duitku
-      const duitkuPayment = await duitkuService.createPayment({
+      const duitkuPayment = await duitku.initiatePayment({
         orderId,
         amount,
-        customerEmail: user.email || `${subdomain}@thinkific.com`
+        customerEmail: customerEmail,
+        customerName: customerName,
       });
       
       // Save payment record
       const payment = await Payment.create({
         orderId,
         userId: user.id,
-        courseId,
+        productId, // Changed from courseId to productId
         amount,
         paymentUrl: duitkuPayment.paymentUrl,
         duitkuReference: duitkuPayment.reference,
@@ -461,7 +479,7 @@ class PaymentController {
         orderId 
       });
     } catch (error) {
-      logger.error('Payment creation failed:', error);
+      logger.error('Payment creation failed:', error.message);
       res.status(500).json({ error: 'Payment creation failed' });
     }
   }
@@ -481,7 +499,7 @@ class PaymentController {
       res.render('payment/success', {
         orderId: payment.orderId,
         amount: payment.amount,
-        courseName: 'Course Name', // You might want to fetch this
+        productName: payment.product_name || 'Product',
         backUrl: `https://${payment.user?.subdomain}.thinkific.com`
       });
     } catch (error) {

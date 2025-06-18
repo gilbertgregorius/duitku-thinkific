@@ -1,42 +1,126 @@
 const { Pool } = require('pg');
 const Redis = require('redis');
-const config = require('../config');
 const logger = require('../utils/logger');
 
 class DataStore {
-  constructor() {
-    // PostgreSQL connection
+  constructor(dataStoreConfig = null) {
+    // If no config provided, load it automatically
+    if (!dataStoreConfig) {
+      try {
+        const appConfig = require('../config');
+        dataStoreConfig = appConfig.dataStoreConfig;
+      } catch (error) {
+        throw new Error('DataStore configuration is required. Please provide a valid configuration object or ensure the config file is set up correctly.');
+      }
+    }
+    
+    this.config = dataStoreConfig;
+    
+    // PostgreSQL setup
     this.pool = new Pool({
-      host: config.database.host,
-      port: config.database.port,
-      database: config.database.database,
-      user: config.database.username,
-      password: config.database.password,
-      max: 20,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 2000,
+      host: this.config.database.host,
+      port: this.config.database.port,
+      database: this.config.database.database,
+      user: this.config.database.username,
+      password: this.config.database.password,
+      max: this.config.database.max,
+      idleTimeoutMillis: this.config.database.idleTimeoutMillis,
+      connectionTimeoutMillis: this.config.database.connectionTimeoutMillis,
     });
 
-    // Redis connection
+    // Redis setup
     this.redis = Redis.createClient({
-      host: config.redis.host,
-      port: config.redis.port,
-      password: config.redis.password
+      url: this.config.getRedisUrl(),
+      retry_strategy: (options) => {
+        if (options.error && options.error.code === 'ECONNREFUSED') {
+          return new Error('Redis server connection refused');
+        }
+        if (options.total_retry_time > 1000 * 60 * 60) {
+          return new Error('Redis retry time exhausted');
+        }
+        if (options.attempt > this.config.retries) {
+          return undefined;
+        }
+        return Math.min(options.attempt * 100, 3000);
+      }
     });
 
     this.redis.on('error', (err) => {
       logger.error('Redis Client Error', err);
     });
 
-    this.redis.connect();
+    this.redis.on('connect', () => {
+      logger.info('Redis Client Connected');
+    });
+
+    this.redis.on('reconnecting', () => {
+      logger.info('Redis Client Reconnecting');
+    });
+
+    // Connect to Redis
+    this.connectRedis();
+
+    if (process.env.NODE_ENV === 'test') {
+      logger.info('[service/dataStore] Config:', this.config.getDebugInfo());
+    }
+  }
+  /////////////////////
+  /// REDIS RELATED ///
+  /////////////////////
+
+  async connectRedis() {
+    try {
+      await this.redis.connect();
+      logger.info('Redis connected successfully');
+    } catch (error) {
+      logger.error('Redis connection failed:', error);
+    }
   }
 
-  // Redis operations for caching and temporary storage
+  async testConnections() {
+    const results = {
+      database: false,
+      redis: false
+    };
+
+    // Test PostgreSQL connection
+    try {
+      const client = await this.pool.connect();
+      await client.query('SELECT 1');
+      client.release();
+      results.database = true;
+      logger.info('Database connectivity test: PASSED');
+    } catch (error) {
+      logger.error('Database connectivity test: FAILED', error);
+    }
+
+    // Test Redis connection
+    try {
+      await this.redis.ping();
+      results.redis = true;
+      logger.info('Redis connectivity test: PASSED');
+    } catch (error) {
+      logger.error('Redis connectivity test: FAILED', error);
+    }
+
+    return results;
+  }
+
+  async close() {
+    try {
+      await this.redis.quit();
+      await this.pool.end();
+      logger.info('DataStore connections closed');
+    } catch (error) {
+      logger.error('Error closing DataStore connections:', error.message);
+    }
+  }
+
   async set(key, value, expireSeconds = 3600) {
     try {
       await this.redis.setEx(key, expireSeconds, JSON.stringify(value));
     } catch (error) {
-      logger.error('Redis set error:', error);
+      logger.error('Redis set error:', error.message);
     }
   }
 
@@ -45,7 +129,7 @@ class DataStore {
       const value = await this.redis.get(key);
       return value ? JSON.parse(value) : null;
     } catch (error) {
-      logger.error('Redis get error:', error);
+      logger.error('Redis get error:', error.message);
       return null;
     }
   }
@@ -55,12 +139,26 @@ class DataStore {
       const exists = await this.redis.exists(key);
       return exists > 0;
     } catch (error) {
-      logger.error('Redis exists error:', error);
+      logger.error('Redis exists error:', error.message);
       return false;
     }
   }
 
-  // Database operations
+  async delete(key) {
+    try {
+      await this.redis.del(key);
+    } catch (error) {
+      logger.error('Redis delete error:', error.message);
+    }
+  }
+
+
+  ////////////////////////
+  /// DATABASE RELATED ///
+  ////////////////////////
+
+
+  ///// PAYMENT TABLE /////
   async savePayment(paymentData) {
     const client = await this.pool.connect();
     try {
@@ -75,8 +173,8 @@ class DataStore {
       
       const values = [
         paymentData.order_id,
-        paymentData.course_name,
-        paymentData.course_description,
+        paymentData.product_name,
+        paymentData.product_description,
         paymentData.amount,
         paymentData.payment_method,
         paymentData.payment_url,
@@ -130,6 +228,63 @@ class DataStore {
     }
   }
 
+  async getPaymentByOrderId(orderId) {
+    const client = await this.pool.connect();
+    try {
+      const query = 'SELECT * FROM payments WHERE order_id = $1';
+      const result = await client.query(query, [orderId]);
+      return result.rows[0];
+    } finally {
+      client.release();
+    }
+  }
+
+  async getPaymentByUserEmail(email) {
+    const client = await this.pool.connect();
+    try {
+      // Since payments table doesn't have user_email, we need to join with users
+      // For now, return null and we'll use order_id based lookup
+      return null;
+    } finally {
+      client.release();
+    }
+  }
+
+  async storePayment(paymentData) {
+    const client = await this.pool.connect();
+    try {
+      const query = `
+        INSERT INTO payments (
+          order_id, product_name, product_description, amount, payment_method, 
+          status, customer_name, customer_email, customer_phone, 
+          duitku_reference, created_at, metadata
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        RETURNING id
+      `;
+      
+      const values = [
+        paymentData.reference,
+        paymentData.product_name || 'Multiple Products',
+        paymentData.product_description || 'Product purchase from Thinkific',
+        paymentData.amount,
+        paymentData.payment_method,
+        paymentData.status,
+        paymentData.customer_name,
+        paymentData.customer_email,
+        paymentData.customer_phone,
+        paymentData.reference,
+        paymentData.created_at || new Date(),
+        paymentData.metadata
+      ];
+
+      const result = await client.query(query, values);
+      return result.rows[0];
+    } finally {
+      client.release();
+    }
+  }
+
+  ///// ENROLLMENT TABLE /////
   async saveEnrollment(enrollmentData) {
     const client = await this.pool.connect();
     try {
@@ -186,61 +341,6 @@ class DataStore {
     }
   }
 
-  async findUserByEmail(email) {
-    const client = await this.pool.connect();
-    try {
-      const query = 'SELECT * FROM users WHERE email = $1';
-      const result = await client.query(query, [email]);
-      return result.rows[0];
-    } finally {
-      client.release();
-    }
-  }
-
-  async getPaymentByOrderId(orderId) {
-    const client = await this.pool.connect();
-    try {
-      const query = 'SELECT * FROM payments WHERE order_id = $1';
-      const result = await client.query(query, [orderId]);
-      return result.rows[0];
-    } finally {
-      client.release();
-    }
-  }
-
-  async getPaymentByUserEmail(email) {
-    const client = await this.pool.connect();
-    try {
-      // Since payments table doesn't have user_email, we need to join with users
-      // For now, return null and we'll use order_id based lookup
-      return null;
-    } finally {
-      client.release();
-    }
-  }
-
-  async logWebhook(webhookData) {
-    const client = await this.pool.connect();
-    try {
-      const query = `
-        INSERT INTO webhook_logs (source, event_type, payload, processed, created_at)
-        VALUES ($1, $2, $3, $4, NOW())
-        RETURNING id
-      `;
-      
-      const result = await client.query(query, [
-        webhookData.source,
-        webhookData.eventType,
-        JSON.stringify(webhookData.payload),
-        webhookData.processed
-      ]);
-      
-      return result.rows[0];
-    } finally {
-      client.release();
-    }
-  }
-
   async getEnrollmentsByEmail(email) {
     const client = await this.pool.connect();
     try {
@@ -253,64 +353,6 @@ class DataStore {
       `;
       const result = await client.query(query, [email]);
       return result.rows;
-    } finally {
-      client.release();
-    }
-  }
-
-  // Queue operations (using Redis for simplicity)
-  async addToQueue(queueName, data) {
-    try {
-      await this.redis.rPush(`queue:${queueName}`, JSON.stringify({
-        data,
-        timestamp: new Date().toISOString(),
-        id: Math.random().toString(36).substr(2, 9)
-      }));
-    } catch (error) {
-      logger.error('Queue add error:', error);
-    }
-  }
-
-  async getFromQueue(queueName) {
-    try {
-      const item = await this.redis.lPop(`queue:${queueName}`);
-      return item ? JSON.parse(item) : null;
-    } catch (error) {
-      logger.error('Queue get error:', error);
-      return null;
-    }
-  }
-
-  // New methods for Thinkific webhook handling
-  async storePayment(paymentData) {
-    const client = await this.pool.connect();
-    try {
-      const query = `
-        INSERT INTO payments (
-          order_id, course_name, course_description, amount, payment_method, 
-          status, customer_name, customer_email, customer_phone, 
-          duitku_reference, created_at, metadata
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-        RETURNING id
-      `;
-      
-      const values = [
-        paymentData.reference,
-        paymentData.course_name || 'Multiple Courses',
-        paymentData.course_description || 'Course purchase from Thinkific',
-        paymentData.amount,
-        paymentData.payment_method,
-        paymentData.status,
-        paymentData.customer_name,
-        paymentData.customer_email,
-        paymentData.customer_phone,
-        paymentData.reference,
-        paymentData.created_at || new Date(),
-        paymentData.metadata
-      ];
-
-      const result = await client.query(query, values);
-      return result.rows[0];
     } finally {
       client.release();
     }
@@ -374,6 +416,18 @@ class DataStore {
     }
   }
 
+  ///// USERS TABLE /////
+  async findUserByEmail(email) {
+    const client = await this.pool.connect();
+    try {
+      const query = 'SELECT * FROM users WHERE email = $1';
+      const result = await client.query(query, [email]);
+      return result.rows[0];
+    } finally {
+      client.release();
+    }
+  }
+
   async storeUserSignup(userData) {
     const client = await this.pool.connect();
     try {
@@ -409,6 +463,53 @@ class DataStore {
       client.release();
     }
   }
+
+  ///// WEBHOOK LOGGING /////
+  async logWebhook(webhookData) {
+    const client = await this.pool.connect();
+    try {
+      const query = `
+        INSERT INTO webhook_logs (source, event_type, payload, processed, created_at)
+        VALUES ($1, $2, $3, $4, NOW())
+        RETURNING id
+      `;
+      
+      const result = await client.query(query, [
+        webhookData.source,
+        webhookData.eventType,
+        JSON.stringify(webhookData.payload),
+        webhookData.processed
+      ]);
+      
+      return result.rows[0];
+    } finally {
+      client.release();
+    }
+  }
+
+
+  ////// QUEUE MANAGEMENT /////
+  async addToQueue(queueName, data) {
+    try {
+      await this.redis.rPush(`queue:${queueName}`, JSON.stringify({
+        data,
+        timestamp: new Date().toISOString(),
+        id: Math.random().toString(36).substr(2, 9)
+      }));
+    } catch (error) {
+      logger.error('Queue add error:', error);
+    }
+  }
+
+  async getFromQueue(queueName) {
+    try {
+      const item = await this.redis.lPop(`queue:${queueName}`);
+      return item ? JSON.parse(item) : null;
+    } catch (error) {
+      logger.error('Queue get error:', error);
+      return null;
+    }
+  }
 }
 
-module.exports = DataStore;
+module.exports = new DataStore();

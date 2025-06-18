@@ -1,10 +1,7 @@
 const logger = require('../utils/logger');
-const ThinkificService = require('../services/thinkificServices');
-const DataStore = require('../services/dataStore');
-const config = require('../config');
 
-const thinkificService = new ThinkificService(config.thinkific);
-const dataStore = new DataStore();
+const thinkific = require('../services/thinkific');
+const dataStore = require('../services/dataStore');
 
 class EnrollmentController {
   constructor() {
@@ -26,7 +23,8 @@ class EnrollmentController {
         email: customerData.customerEmail
       };
       
-      const thinkificUser = await thinkificService.createUser(userData);
+      // TODO: out of scope; remove ASAP
+      const thinkificUser = await thinkific.createUser(userData);
       logger.info(`Thinkific user created/found: ${thinkificUser.id} for ${userData.email}`);
       
       // Step 2: Map course name to course ID (you'll need to implement course mapping)
@@ -36,7 +34,8 @@ class EnrollmentController {
       }
       
       // Step 3: Enroll user in course
-      const enrollment = await thinkificService.enrollUser(courseId, thinkificUser.id);
+      // TODO: access token not handled
+      const enrollment = await thinkific.createEnrollment(courseId, thinkificUser.id);
       logger.info(`User enrolled: ${userData.email} -> Course ID ${courseId}`);
       
       // Step 4: Save enrollment to local database
@@ -87,7 +86,7 @@ class EnrollmentController {
     
     // If no direct match, try to fetch from Thinkific API
     try {
-      const courses = await thinkificService.getCourses();
+      const courses = await thinkific.getCourses();
       const matchedCourse = courses.items?.find(course => 
         course.name.toLowerCase().includes(courseName.toLowerCase()) ||
         courseName.toLowerCase().includes(course.name.toLowerCase())

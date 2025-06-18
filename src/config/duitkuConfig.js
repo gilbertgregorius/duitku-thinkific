@@ -37,7 +37,7 @@ class DuitkuConfig {
 
   getDebugInfo() {
     return {
-      merchantCode: this.merchantCode ? `${this.merchantCode.substring(0, 4)}...` : 'NOT_SET',
+      merchantCode: this.merchantCode ? `SET` : 'NOT_SET',
       apiKey: this.apiKey ? 'SET' : 'NOT_SET',
       environment: this.environment,
       baseUrl: this.baseUrl,

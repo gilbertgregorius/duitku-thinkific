@@ -1,13 +1,10 @@
 const express = require('express');
-const crypto = require('crypto');
-const DataStore = require('../services/dataStore');
-const ThinkificService = require('../services/thinkificServices');
-const config = require('../config');
 const logger = require('../utils/logger');
-
 const router = express.Router();
-const dataStore = new DataStore();
-const thinkificService = new ThinkificService(config.thinkific);
+
+const datastore = require('../services/dataStore');
+const thinkific = require('../services/thinkific');
+
 
 // Middleware to verify Thinkific webhook signature
 const verifyThinkificSignature = (req, res, next) => {
@@ -92,8 +89,8 @@ async function processThinkificOrder(orderData) {
             })
         };
         
-        // Store payment record
-        await dataStore.storePayment(paymentData);
+        // Store payment record to Database
+        await datastore.storePayment(paymentData);
         
         logger.info('Stored Thinkific order:', {
             reference: paymentData.reference,
@@ -143,7 +140,8 @@ async function processThinkificEnrollment(data) {
         // Check if user exists in Thinkific
         let user;
         try {
-            user = await thinkificService.getUserByEmail(customerEmail);
+            // TODO: was getUserByEmail & not handled
+            user = await thinkific.getUser(customerEmail);
             logger.info('User lookup result:', { 
                 email: customerEmail, 
                 found: !!user, 
@@ -166,11 +164,11 @@ async function processThinkificEnrollment(data) {
             });
             
             try {
-                user = await thinkificService.createUser({
+                // TODO: out of project scope; remove ASAP
+                user = await thinkific.createUser({
                     email: customerEmail,
                     first_name: firstName,
                     last_name: lastName,
-                    send_welcome_email: false // They already purchased, no need for welcome email
                 });
                 
                 logger.info('Created new Thinkific user:', { 
@@ -184,10 +182,11 @@ async function processThinkificEnrollment(data) {
         }
         
         // Enroll user in the course
-        const enrollment = await thinkificService.enrollUser(user.id, courseId);
+        // TODO: access token not handled
+        const enrollment = await thinkific.createEnrollment(user.id, courseId);
         
         // Store enrollment record
-        await dataStore.storeEnrollment({
+        await datastore.storeEnrollment({
             payment_reference: reference,
             thinkific_user_id: user.id,
             thinkific_course_id: courseId,
