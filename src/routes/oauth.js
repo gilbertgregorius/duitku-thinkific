@@ -153,12 +153,12 @@ router.get('/callback', async (req, res) => {
                 headers: {
                     'Authorization': `Basic ${authKey}`,
                     'Content-Type': 'application/json',
-                    'User-Agent': 'DuitkuThinkific/1.0.0' // Required by Thinkific API
+                    'User-Agent': 'DuitkuThinkific/1.0.0'
                 }
             }
         );
 
-        const { access_token, refresh_token, expires_in, gid } = tokenResponse.data;
+        const { access_token, refresh_token, token_type, expires_in, gid } = tokenResponse.data;
 
         // DEBUG: Log token details
         logger.info('OAuth token response received', {
@@ -175,26 +175,26 @@ router.get('/callback', async (req, res) => {
         const expiresAt = new Date(Date.now() + (expires_in * 1000));
 
         // Store user in database using Sequelize model
-        const [user, created] = await User.findOrCreate({
-            where: { subdomain },
-            defaults: {
-                subdomain,
-                gid,
-                accessToken: access_token,
-                refreshToken: refresh_token,
-                expiresAt
-            }
-        });
+        // const [user, created] = await User.findOrCreate({
+        //     where: { subdomain },
+        //     defaults: {
+        //         subdomain,
+        //         gid,
+        //         accessToken: access_token,
+        //         refreshToken: refresh_token,
+        //         expiresAt
+        //     }
+        // });
 
         // If user already exists, update with new tokens
-        if (!created) {
-            await user.update({
-                gid,
-                accessToken: access_token,
-                refreshToken: refresh_token,
-                expiresAt
-            });
-        }
+        // if (!created) {
+        //     await user.update({
+        //         gid,
+        //         accessToken: access_token,
+        //         refreshToken: refresh_token,
+        //         expiresAt
+        //     });
+        // }
 
         // Store installation data in global map as backup
         const installationData = {
@@ -217,8 +217,8 @@ router.get('/callback', async (req, res) => {
             expires_in,
             has_access_token: !!access_token,
             has_id_token: !!id_token,
-            user_created: created,
-            user_id: user.id
+            // user_created: created,
+            // user_id: user.id
         });
 
         // Redirect to success page - will implement React frontend later
@@ -227,6 +227,7 @@ router.get('/callback', async (req, res) => {
             message: 'Installation completed successfully',
             subdomain,
             gid,
+            access_token,
             redirect: `/dashboard?subdomain=${subdomain}&status=installed`
         });
 
