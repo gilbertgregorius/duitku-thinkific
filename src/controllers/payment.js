@@ -2,7 +2,6 @@ const logger = require('../utils/logger.js');
 const config = require('../config/index.js');
 
 const duitku = require('../services/duitku.js');
-const thinkific = require('../services/thinkific.js');
 
 const { CreateInvoiceRequest, CreateInvoiceResponse } = require('../dto/paymentDto.js');
 
@@ -27,8 +26,12 @@ class PaymentController {
       const invoiceRequest = CreateInvoiceRequest.fromPaymentData({
         ...paymentData,
         orderId: this.generateEnhancedOrderId(paymentData.customerEmail),
-        callbackUrl: paymentData.callbackUrl || `${config.app.baseUrl}/api/payments/callback`,
-        returnUrl: paymentData.returnUrl || `${config.app.baseUrl}/payment/success`
+        callbackUrl: paymentData.callbackUrl || `${config.app.baseUrl}/payments/callback`,
+        returnUrl: paymentData.returnUrl || `${config.app.baseUrl}/payments/success`,
+        additionalParam: JSON.stringify({
+          customerEmail: paymentData.customerEmail,
+          productId: paymentData.productId
+        })
       });
 
       // Use DTO validation
@@ -57,7 +60,7 @@ class PaymentController {
     }
   }
 
-  async initiatePayment(req, res) {    
+  async createInvoice(req, res) {    
     try {
       const paymentData = req.body;
       
@@ -78,55 +81,20 @@ class PaymentController {
       }
 
       const payload = dto.payload;
-      const accessToken = await tokenManager.getToken();
-      if (!accessToken) {
-        return res.status(400).json({
-          success: false,
-          error: 'No valid OAuth token found. Please set ACCESS_TOKEN in .env or complete OAuth installation.',
-          timestamp: new Date().toISOString()
-        });
-      }
-
-      const result = duitku.initiatePayment(payload.toJSON());
-      const invoiceResponse = CreateInvoiceResponse.fromDuitkuResponse(result);
+      const result = duitku.createInvoice(payload);
+      const response = CreateInvoiceResponse.fromDuitkuResponse(result);
       
       logger.info('Payment initiated successfully', {
-        invoiceResponse: invoiceResponse.toJSON(),
+        invoiceResponse: response.toJSON(),
       });
 
-      // TODO: trigger to external_order and enrollment
-      // await thinkific.createExternalOrder(invoiceResponse.toJSON());
-      // await thinkific.enrollUserInCourse(invoiceResponse.toJSON());
-
-      res.json(invoiceResponse.toJSON());
-
+      res.json(response.toJSON());
     } catch (error) {
       logger.error('Payment initiation error:', error);
       res.status(500).json({
         success: false,
         error: 'Payment initiation failed',
         message: error.message
-      });
-    }
-  }
-
-  async checkTokenStatus(req, res) {
-    try {
-      const tokenInfo = await tokenManager.getInfo();
-      const accessToken = await tokenManager.getToken();
-
-      res.json({
-        success: true,
-        tokenInfo,
-        accessToken: accessToken.substr(0, 10) + '...',
-      });
-
-    } catch (error) {
-      logger.error('Error checking token status:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Failed to check token status',
-        message: error.message,
       });
     }
   }

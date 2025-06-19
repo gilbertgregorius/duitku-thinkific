@@ -5,6 +5,7 @@ class DuitkuConfig {
   constructor() {
     this.merchantCode = process.env.DUITKU_MERCHANT_CODE;
     this.apiKey = process.env.DUITKU_API_KEY;
+    this.merchantKey = process.env.DUITKU_MERCHANT_KEY;
     this.environment = process.env.DUITKU_ENVIRONMENT || 'sandbox';
     this.baseUrl = this.getBaseUrl();
     this.timeout = 30000;
@@ -29,6 +30,7 @@ class DuitkuConfig {
     const errors = [];
     if (!this.merchantCode) errors.push('DUITKU_MERCHANT_CODE is required');
     if (!this.apiKey) errors.push('DUITKU_API_KEY is required');
+    if (!this.merchantKey) errors.push('DUITKU_MERCHANT_KEY is required');
     
     if (errors.length > 0) {
       throw new Error(`Duitku configuration errors: ${errors.join(', ')}`);
@@ -39,6 +41,7 @@ class DuitkuConfig {
     return {
       merchantCode: this.merchantCode ? `SET` : 'NOT_SET',
       apiKey: this.apiKey ? 'SET' : 'NOT_SET',
+      merchantKey: this.merchantKey ? 'SET' : 'NOT_SET',
       environment: this.environment,
       baseUrl: this.baseUrl,
       webhookUrl: this.getWebhookUrl()

@@ -17,9 +17,12 @@ class TokenManager {
                          config.server.environment === 'production';
 
       if (envToken && !useDatabase) {
+        // Use environment variable for development
         this.useEnvToken = true;
         logger.info('TokenManager initialized with environment variable');
       } else {
+        // Use database storage (the existing tokenStorage)
+        this.storage = this.tokenStorage;
         logger.info('TokenManager initialized with database storage');
       }
 

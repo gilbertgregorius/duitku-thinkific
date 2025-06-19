@@ -59,7 +59,7 @@ class Duitku {
    * @param {CreateInvoiceRequest|Object} paymentData - Either a DTO instance or plain object
    * @returns {CreateInvoiceResponse} - Structured response DTO
    */
-  async initiatePayment(paymentData) {
+  async createInvoice(paymentData) {
     try {
       let invoiceRequest;
       if (paymentData instanceof CreateInvoiceRequest) {

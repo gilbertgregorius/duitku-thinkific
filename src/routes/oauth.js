@@ -50,7 +50,7 @@ router.get('/debug', ErrorHandler.asyncHandler(async (req, res) => {
   }
 }));
 
-// INSTALL ENDPOINT - following THINKIFIC_OAUTH_API.md pattern
+// INSTALL ENDPOINT
 router.get('/install', async (req, res) => {
     try {
         const subdomain = req.query.subdomain;
@@ -107,7 +107,7 @@ router.get('/install', async (req, res) => {
     }
 });
 
-// CALLBACK ENDPOINT - following THINKIFIC_OAUTH_API.md pattern exactly
+// CALLBACK ENDPOINT
 router.get('/callback', async (req, res) => {
     try {
         const { code, state, subdomain, id_token } = req.query;
@@ -133,17 +133,17 @@ router.get('/callback', async (req, res) => {
         // Clean up stored state
         await client.del(getCodeVerifierKey(state));
 
-        // Exchange authorization code for access token with PKCE - exactly as in doc
+        // Exchange authorization code for access token with PKCE
         const json = JSON.stringify({
             grant_type: 'authorization_code',
             code: code,
             code_verifier: code_verifier // Required for PKCE
         });
 
-        // Create Basic Auth header - exactly as in doc  
+        // Create Basic Auth header
         const authKey = Buffer.from(`${process.env.THINKIFIC_CLIENT_ID}:${process.env.THINKIFIC_CLIENT_SECRET || ''}`).toString('base64');
 
-        // RETRIEVE ACCESS TOKEN - using exact pattern from doc
+        // RETRIEVE ACCESS TOKEN
         const tokenResponse = await axios.post(
             `https://${subdomain}.thinkific.com/oauth2/token`,
             json,
@@ -161,48 +161,13 @@ router.get('/callback', async (req, res) => {
             access_token: access_token.substring(0, 10) + '...',
         });
 
-        // Calculate expiry date
         const expiresAt = new Date(Date.now() + (expires_in * 1000));
         await tokenManager.storeToken(access_token, refresh_token, expiresAt);
 
-        logger.info('OAuth token stored successfully');
-
-
-        // Store installation data in global map as backup (can be removed in production)
-        const installationData = {
-            subdomain,
-            access_token: 'STORED_IN_TOKEN_MANAGER', // Don't store actual token here
-            refresh_token,
-            id_token,
-            expires_in,
-            gid,
-            installed_at: new Date().toISOString()
-        };
-
-        // Store in global map (in production, store in database)
-        global.thinkificInstallations = global.thinkificInstallations || new Map();
-        global.thinkificInstallations.set(subdomain, installationData);
-
-        logger.info('OAuth installation completed', {
-            subdomain,
-            gid,
-            expires_in,
-            has_access_token: !!access_token,
-            has_id_token: !!id_token,
-            token_stored: true,
-            // user_created: created,
-            // user_id: user.id
-        });
-
-        // Redirect to success page - will implement React frontend later
         res.json({
             success: true,
             message: 'Installation completed successfully',
-            subdomain,
-            gid,
-            token_stored: true,
-            expires_at: expiresAt.toISOString(),
-            redirect: `/dashboard?subdomain=${subdomain}&status=installed`
+            expires_at: expiresAt.toISOString()
         });
 
     } catch (error) {
@@ -223,42 +188,46 @@ router.get('/callback', async (req, res) => {
     }
 });
 
-// Get installation status
-router.get('/status/:subdomain', (req, res) => {
-    const { subdomain } = req.params;
-    
-    const installations = global.thinkificInstallations || new Map();
-    const installation = installations.get(subdomain);
-    
-    if (!installation) {
-        return res.json({ installed: false });
+// Get installation status - use tokenManager instead of global storage
+router.get('/status/:subdomain', async (req, res) => {
+    try {
+        const hasToken = await tokenManager.hasValidToken();
+        const tokenInfo = hasToken ? await tokenManager.getTokenInfo() : null;
+        
+        res.json({
+            installed: hasToken,
+            subdomain: req.params.subdomain,
+            token_info: tokenInfo
+        });
+    } catch (error) {
+        logger.error('Error checking installation status:', error);
+        res.status(500).json({ 
+            installed: false, 
+            error: 'Failed to check status' 
+        });
     }
-
-    res.json({
-        installed: true,
-        subdomain: installation.subdomain,
-        installed_at: installation.installed_at,
-        gid: installation.gid,
-        expires_in: installation.expires_in
-    });
 });
 
-// Revoke access (uninstall) - following doc pattern
+// Revoke access (uninstall) - use tokenManager to get token
 router.post('/revoke', async (req, res) => {
     try {
         const { subdomain } = req.body;
         
-        const installations = global.thinkificInstallations || new Map();
-        const installation = installations.get(subdomain);
-        
-        if (!installation) {
-            return res.status(404).json({ error: 'Installation not found' });
+        if (!subdomain) {
+            return res.status(400).json({ error: 'subdomain is required' });
         }
 
-        // Revoke tokens at Thinkific - using application/x-www-form-urlencoded as per doc
+        // Get token from tokenManager instead of global storage
+        const accessToken = await tokenManager.getToken();
+        
+        if (!accessToken) {
+            return res.status(404).json({ error: 'No access token found to revoke' });
+        }
+
+        // Revoke tokens at Thinkific
         await axios.post(
             `https://${subdomain}.thinkific.com/oauth2/revoke`,
-            `token=${installation.access_token}`,
+            `token=${accessToken}`,
             {
                 headers: {
                     'Content-Type': 'application/x-www-form-urlencoded'
@@ -266,8 +235,8 @@ router.post('/revoke', async (req, res) => {
             }
         );
 
-        // Remove from local storage
-        installations.delete(subdomain);
+        // Remove token from tokenManager
+        await tokenManager.removeToken();
 
         logger.info('OAuth access revoked', { subdomain });
 
@@ -282,13 +251,14 @@ router.post('/revoke', async (req, res) => {
 // Token status endpoint
 router.get('/token-status', async (req, res) => {
   try {
-    const tokenInfo = await tokenManager.getInfo();
+    const tokenInfo = await tokenManager.getTokenInfo();
     const accessToken = await tokenManager.getToken();
 
     res.json({
       success: true,
       tokenInfo,
-      accessToken: accessToken.substring(0, 10) + '...',
+      hasToken: !!accessToken,
+      tokenPreview: accessToken ? accessToken.substring(0, 10) + '...' : null
     });
 
   } catch (error) {
