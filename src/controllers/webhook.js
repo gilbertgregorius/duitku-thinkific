@@ -32,6 +32,9 @@ class WebhookController {
         merchantOrderId,
         resultCode,
         amount,
+        hasAdditionalParam: !!additionalParam,
+        additionalParamContent: additionalParam,
+        fullRequestBody: req.body
       });
 
       const isValidSignature = this.verifySignature({
@@ -64,8 +67,59 @@ class WebhookController {
 
       const { customerEmail, productId } = enrollmentData;
 
+      // If additionalParam is empty (common with Duitku), try to get data from database
       if (!customerEmail || !productId) {
-        logger.error('Missing enrollment data in callback', { customerEmail, productId });
+        logger.info('AdditionalParam empty, attempting to retrieve enrollment data from database', { merchantOrderId });
+        
+        try {
+          // Try to get payment data from database using merchantOrderId
+          const paymentRecord = await dataStore.getPaymentByOrderId(merchantOrderId);
+          
+          if (paymentRecord) {
+            logger.info('Retrieved payment data from database', {
+              merchantOrderId,
+              customerEmail: paymentRecord.customer_email,
+              paymentId: paymentRecord.id
+            });
+            
+            // Use data from database
+            const dbCustomerEmail = paymentRecord.customer_email;
+            const dbProductId = paymentRecord.product_id || paymentRecord.additional_data?.productId;
+            
+            if (dbCustomerEmail && dbProductId) {
+              // Process successful payment with database data
+              logger.info('Payment processed successfully from database', {
+                merchantOrderId,
+                customerEmail: dbCustomerEmail,
+                productId: dbProductId
+              });
+              
+              return res.json({ 
+                success: true, 
+                message: 'Payment processed successfully',
+                receivedData: {
+                  merchantOrderId,
+                  amount,
+                  resultCode,
+                  reference,
+                  customerEmail: dbCustomerEmail,
+                  productId: dbProductId,
+                  source: 'database'
+                }
+              });
+            }
+          }
+        } catch (dbError) {
+          logger.error('Error retrieving payment data from database', { merchantOrderId, error: dbError.message });
+        }
+        
+        logger.error('Missing enrollment data in callback and unable to retrieve from database', { 
+          merchantOrderId,
+          customerEmail, 
+          productId,
+          hasAdditionalParam: !!additionalParam,
+          additionalParamContent: additionalParam
+        });
         return res.status(400).json({ success: false, error: 'Missing enrollment data' });
       }
 

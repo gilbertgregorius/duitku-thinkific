@@ -6,7 +6,61 @@ const tokenManager = require('../src/utils/tokenManager');
 const { CreateInvoiceRequest } = require('../src/dto/paymentDto');
 
 // Global variable to store callback data
-let latestCallbackData = null;
+let receivedCallbacks = [];
+
+// Simple webhook interceptor
+function setupWebhookInterceptor() {
+  const webhookController = require('../src/controllers/webhook');
+  const originalHandler = webhookController.handleDuitkuCallback;
+  
+  // Override the webhook handler to capture callbacks
+  webhookController.handleDuitkuCallback = async function(req, res) {
+    const callbackData = req.body;
+    console.log(`[WEBHOOK] 🎯 CALLBACK INTERCEPTED: Order ${callbackData.merchantOrderId}, Result ${callbackData.resultCode}`);
+    
+    // Store the callback
+    receivedCallbacks.push({
+      timestamp: new Date().toISOString(),
+      data: callbackData
+    });
+    
+    // Call original handler
+    return await originalHandler.call(this, req, res);
+  };
+  
+  return () => {
+    // Restore original handler
+    webhookController.handleDuitkuCallback = originalHandler;
+  };
+}
+
+// Function to wait for a specific callback
+function waitForCallback(expectedOrderId, timeoutMs = 60000) {
+  return new Promise((resolve) => {
+    const startTime = Date.now();
+    
+    const checkInterval = setInterval(() => {
+      // Check if we have the callback
+      const callback = receivedCallbacks.find(cb => 
+        cb.data.merchantOrderId === expectedOrderId
+      );
+      
+      if (callback) {
+        clearInterval(checkInterval);
+        console.log(`[WEBHOOK] ✅ Found callback for order ${expectedOrderId}`);
+        resolve(callback.data);
+        return;
+      }
+      
+      // Check timeout
+      if (Date.now() - startTime > timeoutMs) {
+        clearInterval(checkInterval);
+        console.log(`[WEBHOOK] ⏰ Timeout waiting for callback for order ${expectedOrderId}`);
+        resolve(null);
+      }
+    }, 1000); // Check every second
+  });
+}
 
 // Helper function to wait for user input
 function waitForUserInput() {
@@ -35,6 +89,11 @@ describe('Duitku Payment Integration', () => {
 
   beforeAll(async () => {
     console.log('\n=== PHASE 0: INITIALIZATION ===');
+    
+    // Clear any previous test data
+    global.testPaymentResult = null;
+    receivedCallbacks = [];
+    
     accessToken = await tokenManager.getToken();
     console.log(`[0.1] Access token: ${accessToken ? 'Available' : 'Not available'}`);
     
@@ -64,7 +123,6 @@ describe('Duitku Payment Integration', () => {
       console.log('\n=== PHASE 2: GET COURSE PRODUCT ===');
       
       const products = await thinkific.getProducts(accessToken);
-      console.log(`[2.1] Found ${products.items.length} total products`);
       
       testProduct = products.items.find(product => 
         product.productable_type === 'Course' && product.productable_id
@@ -87,7 +145,6 @@ describe('Duitku Payment Integration', () => {
 
     it('should get course details from productable_id', async () => {
       console.log('\n=== PHASE 3: GET COURSE DETAILS ===');
-      console.log(`[3.1] Getting course details for productable_id: ${testProduct.productable_id}`);
       
       testCourse = await thinkific.getCourse(accessToken, testProduct.productable_id);
       
@@ -103,10 +160,12 @@ describe('Duitku Payment Integration', () => {
       console.log('\n=== PHASE 4: CREATE PAYMENT INVOICE ===');
       
       const orderId = `TEST_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      console.log(`[4.1] Generated order ID: ${orderId}`);
-      
-      // Use a valid amount (Duitku requires minimum amount)
       const amount = testProduct.price > 0 ? testProduct.price : 100000; // Minimum IDR 100,000
+      
+      console.log(`[4.1] Generated order ID: ${orderId}`);
+      console.log(`[4.2] Payment amount: ${amount}`);
+      console.log(`[4.3] Customer: ${testUser.email}`);
+      console.log(`[4.4] Product: ${testProduct.name} (ID: ${testProduct.id})`);
       
       const paymentData = {
         customerEmail: testUser.email,
@@ -129,14 +188,11 @@ describe('Duitku Payment Integration', () => {
         })
       };
 
-      console.log(`[4.2] Payment data prepared: ${paymentData.customerEmail}, Amount: ${paymentData.amount}, Product: ${paymentData.productDetails}`);
-
       const invoiceRequest = CreateInvoiceRequest.fromPaymentData({
         ...paymentData,
         orderId: orderId,
       });
 
-      console.log(`[4.3] DTO created and mapped`);
 
       const validationErrors = invoiceRequest.validate();
       if (validationErrors.length > 0) {
@@ -144,16 +200,10 @@ describe('Duitku Payment Integration', () => {
         throw new Error(`Validation failed: ${validationErrors.join(', ')}`);
       }
 
-      console.log(`[4.4] DTO validation passed`);
 
-      console.log(`[4.5] Calling Duitku API...`);
       const result = await duitku.createInvoice(invoiceRequest);
       
       console.log(`[4.6] SUCCESS: Invoice created`);
-      console.log(`     - Reference: ${result.reference}`);
-      console.log(`     - Amount: ${result.amount}`);
-      console.log(`     - Status: ${result.statusCode} (${result.statusMessage})`);
-      console.log(`     - Payment URL: ${result.paymentUrl}`);
 
       expect(result).toBeTruthy();
       expect(result.statusCode).toBe('00');
@@ -161,7 +211,6 @@ describe('Duitku Payment Integration', () => {
       expect(result.reference).toBeTruthy();
       expect(result.amount).toBeTruthy();
 
-      console.log(`[4.7] All assertions passed`);
       
       // Store the result for callback testing
       global.testPaymentResult = {
@@ -184,53 +233,94 @@ describe('Duitku Payment Integration', () => {
       }
       
       const { orderId, reference, amount, customerEmail, productId, paymentUrl } = global.testPaymentResult;
-      console.log(`[5.1] Using payment data - Order ID: ${orderId}, Reference: ${reference}`);
       
-      // Display payment instructions
-      console.log('\n🔥 MANUAL PAYMENT REQUIRED 🔥');
-      console.log('=====================================');
-      console.log(`[5.2] PAYMENT INSTRUCTIONS:`);
-      console.log(`     1. Open payment URL: ${paymentUrl}`);
-      console.log(`     2. Complete the payment via Virtual Account`);
-      console.log(`     3. Webhook URL: https://3c7d-180-242-128-150.ngrok-free.app/webhooks/duitku`);
-      console.log(`     4. Expected Order ID: ${orderId}`);
-      console.log('=====================================');
+      console.log(`[5.1] 🎯 CURRENT TEST DATA:`);
+      console.log(`     - Order ID: ${orderId}`);
+      console.log(`     - Reference: ${reference}`);
+      console.log(`     - Amount: ${amount}`);
+      console.log(`     - Payment URL: ${paymentUrl}`);
       
-      console.log('\n📋 VERIFICATION CHECKLIST:');
-      console.log('After completing payment, verify:');
-      console.log(`   ✅ Webhook receives POST to /webhooks/duitku`);
-      console.log(`   ✅ merchantOrderId: ${orderId}`);
-      console.log(`   ✅ amount: ${amount}`);
-      console.log(`   ✅ reference: ${reference}`);
-      console.log(`   ✅ resultCode: 00 (success)`);
-      console.log(`   ✅ additionalParam contains: {"customerEmail":"${customerEmail}","productId":"${productId}"}`);
+      // Clear previous callbacks
+      receivedCallbacks = [];
       
-      console.log('\n⏳ Complete the payment and verify webhook receives callback...');
-      console.log('   Press ENTER when done to complete test');
+      // Set up webhook interceptor
+      console.log(`[5.2] 🔧 Setting up webhook interceptor...`);
+      const restoreWebhook = setupWebhookInterceptor();
       
-      // Wait for user confirmation
+      console.log(`[5.3] 🔥 MANUAL PAYMENT REQUIRED:`);
+      console.log(`     1. Open: ${paymentUrl}`);
+      console.log(`     2. Complete payment via Virtual Account`);
+      console.log(`     3. Wait for webhook callback`);
+      console.log(`     4. Press ENTER when you see callback intercepted message above`);
+      
+      // Wait for user to complete payment
       await waitForUserInput();
       
-      console.log(`[5.3] ✅ Manual verification completed!`);
+      console.log(`[5.4] 🕒 Checking for received callbacks...`);
       
-      // Since this is a manual test, we'll just log success
-      console.log(`[5.4] 🎉 PAYMENT FLOW TEST COMPLETED!`);
-      console.log(`[5.5] Summary:`);
-      console.log(`     - Payment URL generated: ✅ ${paymentUrl}`);
-      console.log(`     - Order ID: ✅ ${orderId}`);
-      console.log(`     - Reference: ✅ ${reference}`);
-      console.log(`     - Webhook URL: ✅ https://3c7d-180-242-128-150.ngrok-free.app/webhooks/duitku`);
-      console.log(`     - Manual payment verification: ✅ (User confirmed)`);
+      // Wait for the callback (with 30 second timeout after user presses ENTER)
+      const callbackData = await waitForCallback(orderId, 30000);
       
-      console.log('\n🔧 TO VERIFY WEBHOOK WORKED:');
-      console.log('   1. Check your terminal/logs for webhook POST request');
-      console.log('   2. Verify handleDuitkuCallback was called');
-      console.log('   3. Check callback data matches expected values above');
+      // Restore original webhook
+      restoreWebhook();
       
-      // Test passes if user confirms manual verification
-      expect(global.testPaymentResult).toBeTruthy();
+      if (callbackData) {
+        console.log(`[5.5] 🎉 REAL CALLBACK RECEIVED AND VERIFIED!`);
+        console.log(`[5.6] CALLBACK DETAILS:`);
+        console.log(`     - merchantOrderId: ${callbackData.merchantOrderId}`);
+        console.log(`     - amount: ${callbackData.amount}`);
+        console.log(`     - resultCode: ${callbackData.resultCode}`);
+        console.log(`     - reference: ${callbackData.reference}`);
+        
+        // Parse additionalParam
+        let additionalData = {};
+        try {
+          additionalData = JSON.parse(callbackData.additionalParam || '{}');
+        } catch (error) {
+          console.log(`     - additionalParam parse error: ${error.message}`);
+        }
+        
+        console.log(`[5.7] � VERIFICATION:`);
+        const orderMatch = callbackData.merchantOrderId === orderId;
+        const amountMatch = callbackData.amount === amount.toString();
+        const referenceMatch = callbackData.reference === reference;
+        const successMatch = callbackData.resultCode === '00';
+        
+        console.log(`     - Order ID: ${orderMatch ? '✅' : '❌'} (${callbackData.merchantOrderId} vs ${orderId})`);
+        console.log(`     - Amount: ${amountMatch ? '✅' : '❌'} (${callbackData.amount} vs ${amount})`);
+        console.log(`     - Reference: ${referenceMatch ? '✅' : '❌'} (${callbackData.reference} vs ${reference})`);
+        console.log(`     - Payment Success: ${successMatch ? '✅' : '❌'} (${callbackData.resultCode})`);
+        console.log(`     - Customer Email: ${additionalData.customerEmail === customerEmail ? '✅' : '❌'}`);
+        console.log(`     - Product ID: ${additionalData.productId === productId ? '✅' : '❌'}`);
+        
+        // Assertions
+        expect(callbackData.merchantOrderId).toBe(orderId);
+        expect(callbackData.amount).toBe(amount.toString());
+        expect(callbackData.reference).toBe(reference);
+        expect(callbackData.resultCode).toBe('00');
+        
+        console.log(`[5.8] ✅ ALL VERIFICATIONS PASSED!`);
+        
+      } else {
+        console.log(`[5.5] ❌ NO CALLBACK RECEIVED!`);
+        console.log(`[5.6] Possible reasons:`);
+        console.log(`     - Payment was not completed`);
+        console.log(`     - Webhook URL not accessible (check ngrok)`);
+        console.log(`     - Duitku couldn't send callback`);
+        console.log(`     - Wrong webhook endpoint`);
+        
+        console.log(`[5.7] Received callbacks count: ${receivedCallbacks.length}`);
+        if (receivedCallbacks.length > 0) {
+          console.log(`[5.8] Recent callbacks:`);
+          receivedCallbacks.forEach((cb, i) => {
+            console.log(`     ${i+1}. Order: ${cb.data.merchantOrderId}, Result: ${cb.data.resultCode}, Time: ${cb.timestamp}`);
+          });
+        }
+        
+        throw new Error(`No callback received for order ${orderId}`);
+      }
       
-      console.log(`[5.6] Real payment flow test completed! 🎉`);
-    }, 300000); // 5 minute timeout for the entire test
+      console.log(`[5.9] 🎉 REAL PAYMENT TEST COMPLETED SUCCESSFULLY!`);
+    }, 300000); // 5 minute timeout
   });
 });
