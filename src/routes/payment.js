@@ -12,4 +12,9 @@ router.get('/status/:orderId',
   (req, res) => paymentController.getPaymentStatus(req, res)
 );
 
+// Simple stateless callback endpoint for Duitku
+router.post('/callback', 
+  (req, res) => paymentController.handleDuitkuCallback(req, res)
+);
+
 module.exports = router;

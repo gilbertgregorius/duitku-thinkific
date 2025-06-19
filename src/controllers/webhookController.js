@@ -3,6 +3,7 @@ const enrollCtrl = require('./enrollmentController');
 const crypto = require('crypto');
 
 const dataStore = require('../services/dataStore');
+const duitku = require('../services/duitku');
 
 class WebhookController {
   
@@ -94,107 +95,73 @@ class WebhookController {
     try {
       const webhookData = req.body;
       
-      // Enhanced validation with detailed error messages
-      const {
-        merchantOrderId,
-        amount,
-        resultCode,
-        merchantUserId,
-        reference,
-        signature: receivedSignature,
-        spUserHash,
-        settlementDate,
-        issuerCode,
-        paymentMethod
-      } = webhookData;
+      logger.info('Duitku webhook received', {
+        orderId: webhookData.merchantOrderId,
+        amount: webhookData.amount,
+        resultCode: webhookData.resultCode,
+        timestamp: new Date().toISOString()
+      });
 
-      // Validate required fields
-      if (!merchantOrderId || !amount || !resultCode || !receivedSignature) {
-        logger.warn('Duitku webhook validation failed - missing required fields', {
-          hasOrderId: !!merchantOrderId,
-          hasAmount: !!amount,
-          hasResultCode: !!resultCode,
-          hasSignature: !!receivedSignature
-        });
-        return res.status(400).json({ 
-          success: false,
-          error: "Missing required Duitku webhook data fields",
-          details: {
-            merchantOrderId: !!merchantOrderId,
-            amount: !!amount,
-            resultCode: !!resultCode,
-            signature: !!receivedSignature
+      // Use DTO-enhanced webhook processing
+      const processedWebhook = duitku.processWebhook(webhookData);
+      
+      if (!processedWebhook.valid) {
+        logger.warn('Duitku webhook processing failed', {
+          error: processedWebhook.error,
+          orderId: processedWebhook.orderId,
+          webhookData: {
+            merchantOrderId: webhookData?.merchantOrderId,
+            amount: webhookData?.amount,
+            resultCode: webhookData?.resultCode,
+            hasSignature: !!webhookData?.signature
           }
         });
-      }
-
-      // Enhanced signature verification
-      const signatureCheck = this.verifyDuitkuSignature(webhookData);
-      if (!signatureCheck.valid) {
-        logger.warn('Duitku webhook signature verification failed', {
-          orderId: merchantOrderId,
-          error: signatureCheck.error,
-          calculated: signatureCheck.calculatedSignature,
-          received: signatureCheck.receivedSignature
-        });
+        
         return res.status(400).json({
           success: false,
-          error: "Invalid Duitku payment signature - webhook verification failed",
-          orderId: merchantOrderId
-        });
-      }
-
-      // Enhanced payment status mapping
-      const paymentStatusInfo = this.mapPaymentStatus(resultCode);
-      
-      if (!paymentStatusInfo.isKnown) {
-        logger.error('Unknown Duitku payment result code', {
-          orderId: merchantOrderId,
-          resultCode,
-          amount
-        });
-        return res.status(400).json({
-          success: false,
-          error: `Unknown payment result code: ${resultCode}`,
-          orderId: merchantOrderId
+          error: processedWebhook.error,
+          orderId: processedWebhook.orderId,
+          timestamp: processedWebhook.timestamp
         });
       }
 
       // Enhanced duplicate detection
-      const duplicateCheck = await this.checkDuplicatePayment(merchantOrderId, reference);
+      const duplicateCheck = await this.checkDuplicatePayment(
+        processedWebhook.orderId, 
+        processedWebhook.reference
+      );
       
       if (duplicateCheck.isDuplicate) {
         logger.info('Duplicate Duitku payment notification detected', {
-          orderId: merchantOrderId,
-          reference,
+          orderId: processedWebhook.orderId,
+          reference: processedWebhook.reference,
           previouslyProcessed: duplicateCheck.existing
         });
+        
         return res.json({
           success: true,
           status: "duplicate",
-          orderId: merchantOrderId,
-          paymentStatus: paymentStatusInfo.status,
+          orderId: processedWebhook.orderId,
+          paymentStatus: processedWebhook.status,
           previouslyProcessed: duplicateCheck.existing,
-          source: "duitku"
+          source: "duitku",
+          timestamp: processedWebhook.timestamp
         });
       }
 
-      // Create comprehensive payment record (Pipedream pattern)
+      // Create comprehensive payment record using processed webhook data
       const paymentRecord = {
-        orderId: merchantOrderId,
-        amount: parseFloat(amount),
-        status: paymentStatusInfo.status,
-        resultCode,
-        merchantUserId,
-        reference,
-        paymentMethod,
-        issuerCode,
-        settlementDate,
-        spUserHash,
-        processedAt: new Date().toISOString(),
+        orderId: processedWebhook.orderId,
+        amount: processedWebhook.amount,
+        status: processedWebhook.status,
+        resultCode: processedWebhook.resultCode,
+        reference: processedWebhook.reference,
+        paymentCode: processedWebhook.paymentCode,
+        processedAt: processedWebhook.timestamp,
         verified: true,
         source: "duitku",
-        processingTime: Date.now() - startTime
+        processingTime: Date.now() - startTime,
+        originalWebhookData: processedWebhook.originalData
       };
 
       // Store payment record first

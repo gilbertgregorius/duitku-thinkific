@@ -4,9 +4,8 @@ const axios = require('axios');
 const router = express.Router();
 const logger = require('../utils/logger');
 const oauthConfig = require('../config/oauthConfig');
-const redisConfig = require('../config/redisConfig');
 const ErrorHandler = require('../middleware/errorHandler');
-const User = require('../models/User'); // Add User model
+const tokenManager = require('../utils/tokenManager');
 
 // Store code verifiers in Redis for cross-process sharing
 const redis = require('redis');
@@ -23,7 +22,6 @@ async function getRedisClient() {
 
 // Store code verifiers in Redis instead of memory
 const getCodeVerifierKey = (state) => `oauth:verifier:${state}`;
-const getTokenKey = (subdomain) => `oauth:token:${subdomain}`;
 
 // DEBUG ENDPOINT - to check OAuth configuration
 router.get('/debug', ErrorHandler.asyncHandler(async (req, res) => {
@@ -159,47 +157,21 @@ router.get('/callback', async (req, res) => {
         );
 
         const { access_token, refresh_token, token_type, expires_in, gid } = tokenResponse.data;
-
-        // DEBUG: Log token details
-        logger.info('OAuth token response received', {
-            access_token_length: access_token?.length,
-            access_token_preview: access_token?.substring(0, 50) + '...',
-            access_token_type: access_token?.includes('.') ? 'JWT' : 'UUID',
-            refresh_token_length: refresh_token?.length,
-            gid,
-            expires_in,
-            service: 'course-enrollment'
+        logger.info('OAuth token received', {
+            access_token: access_token.substring(0, 10) + '...',
         });
 
         // Calculate expiry date
         const expiresAt = new Date(Date.now() + (expires_in * 1000));
+        await tokenManager.storeToken(access_token, refresh_token, expiresAt);
 
-        // Store user in database using Sequelize model
-        // const [user, created] = await User.findOrCreate({
-        //     where: { subdomain },
-        //     defaults: {
-        //         subdomain,
-        //         gid,
-        //         accessToken: access_token,
-        //         refreshToken: refresh_token,
-        //         expiresAt
-        //     }
-        // });
+        logger.info('OAuth token stored successfully');
 
-        // If user already exists, update with new tokens
-        // if (!created) {
-        //     await user.update({
-        //         gid,
-        //         accessToken: access_token,
-        //         refreshToken: refresh_token,
-        //         expiresAt
-        //     });
-        // }
 
-        // Store installation data in global map as backup
+        // Store installation data in global map as backup (can be removed in production)
         const installationData = {
             subdomain,
-            access_token,
+            access_token: 'STORED_IN_TOKEN_MANAGER', // Don't store actual token here
             refresh_token,
             id_token,
             expires_in,
@@ -217,6 +189,7 @@ router.get('/callback', async (req, res) => {
             expires_in,
             has_access_token: !!access_token,
             has_id_token: !!id_token,
+            token_stored: true,
             // user_created: created,
             // user_id: user.id
         });
@@ -227,7 +200,8 @@ router.get('/callback', async (req, res) => {
             message: 'Installation completed successfully',
             subdomain,
             gid,
-            access_token,
+            token_stored: true,
+            expires_at: expiresAt.toISOString(),
             redirect: `/dashboard?subdomain=${subdomain}&status=installed`
         });
 
@@ -303,6 +277,28 @@ router.post('/revoke', async (req, res) => {
         logger.error('OAuth revoke error:', error);
         res.status(500).json({ error: 'Failed to revoke access' });
     }
+});
+
+// Token status endpoint
+router.get('/token-status', async (req, res) => {
+  try {
+    const tokenInfo = await tokenManager.getInfo();
+    const accessToken = await tokenManager.getToken();
+
+    res.json({
+      success: true,
+      tokenInfo,
+      accessToken: accessToken.substring(0, 10) + '...',
+    });
+
+  } catch (error) {
+    logger.error('Error checking token status:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to check token status',
+      message: error.message
+    });
+  }
 });
 
 module.exports = router;
